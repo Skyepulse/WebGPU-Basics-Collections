@@ -43,12 +43,13 @@
     import { startup_2 } from './2-ComputeBasics/main';
     import { startup_3 } from './3-VariablesAndUniforms/main';
     import { startup_4 } from './4-StorageBufferInstancing/main';
+    import { startup_5 } from './5-VertexAndIndexBuffers/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
 
-    const numberOfExamples = 4;
-    const startupFunctions = [startup_1, startup_2, startup_3, startup_4];
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing'];
+    const numberOfExamples = 5;
+    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5];
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers'];
 
     // Slider state
     const hoveredIndex = ref<number|null>(null);

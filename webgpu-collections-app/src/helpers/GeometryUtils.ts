@@ -1,4 +1,103 @@
 //================================//
+interface VertexInformation
+{
+    x: number,
+    y: number,
+    r: number,
+    g: number,
+    b: number
+}
+
+//================================//
+export interface TopologyInformation
+{
+    vertexData: Float32Array,
+    indexData: Uint16Array,
+    numVertices: number
+}
+
+//================================//
+// This method contains optimization for color usage and also index buffer optimization
+export function createCircleVerticesWithColor(
+{
+    radius = 1,
+    subdivisions = 24,
+    innerRadius = 0,
+    startAngle = 0,
+    endAngle = Math.PI * 2
+} = {}): TopologyInformation
+{
+    const numVertices = (subdivisions + 1) * 2;
+    const vertexData: Float32Array = new Float32Array(numVertices * (2 + 1)); // position + color per vertex 8 x (4 here) bit
+    const colorData: Uint8Array = new Uint8Array(vertexData.buffer); // This is a 8 bit per channel view of the 32 bit channel float buffer
+
+    let offset = 0;
+    let colorOffset = 8;
+    const addVertex = (vertex: VertexInformation) => {
+        vertexData[offset++] = vertex.x;
+        vertexData[offset++] = vertex.y;
+        offset+=1; // Skip the color (1 byte, 8 bits)
+        colorData[colorOffset++] = vertex.r * 255;
+        colorData[colorOffset++] = vertex.g * 255;
+        colorData[colorOffset++] = vertex.b * 255;
+        colorOffset += 9; // Skip the remaining byte and position (1 byte + 8 bytes)
+    };
+
+    const innerColor = [1.0, 1.0, 1.0];
+    const outerColor = [0.1, 0.1, 0.1];
+
+    // 2 triangles per subdivision
+    //
+    // 0--2
+    // | /|
+    // |/ |
+    // 1--3
+    // 
+    // Up to down per angle
+
+    for (let i = 0; i <= subdivisions; i++) 
+    {
+        const angle = startAngle + (i + 0) * (endAngle - startAngle) / subdivisions;
+
+        const c1 = Math.cos(angle);
+        const s1 = Math.sin(angle);
+
+        addVertex({ x: c1 * radius, y: s1 * radius, r: outerColor[0], g: outerColor[1], b: outerColor[2] });
+        addVertex({ x: c1 * innerRadius, y: s1 * innerRadius, r: innerColor[0], g: innerColor[1], b: innerColor[2] });
+    }
+
+    const indexData = new Uint16Array(subdivisions * 6);
+    let index = 0;
+
+    // 1st tri  2nd tri  3rd tri  4th tri
+    // 0 1 2    2 1 3    2 3 4    4 3 5
+    //
+    // 0--2        2     2--4        4  .....
+    // | /        /|     | /        /|
+    // |/        / |     |/        / |
+    // 1        1--3     3        3--5  .....
+    for (let i = 0; i < subdivisions; ++i) {
+        const offset = i * 2;
+
+        // Triangle One
+        indexData[index++] = offset;
+        indexData[index++] = offset + 1;
+        indexData[index++] = offset + 2;
+
+        // Triangle Two
+        indexData[index++] = offset + 2;
+        indexData[index++] = offset + 1;
+        indexData[index++] = offset + 3;
+    }
+
+    return {
+        vertexData,
+        indexData,
+        numVertices: indexData.length
+    };
+}
+
+//================================//
 export function createCircleVertices(
 {
     radius = 1,

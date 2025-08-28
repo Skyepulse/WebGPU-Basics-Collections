@@ -56,7 +56,7 @@ export async function startup_4(canvas: HTMLCanvasElement)
     // Buffer size
     const staticUniformBufferSize =
         4 * 4 + // color vec4f
-        2 * 4 + // scale vec2f
+        2 * 4 + // offset vec2f
         2 * 4;  // PADDING (needed since WGSL requires std430 layout)
 
     const scaleUniformBufferSize = 

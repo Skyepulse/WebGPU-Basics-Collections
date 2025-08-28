@@ -1,12 +1,10 @@
-/// <reference types="@webgpu/types" />
-
 //================================//
 import vertWGSL from './redTriangle_vert.wgsl?raw';
 import fragWGSL from './redTriangle_frag.wgsl?raw';
 
 //================================//
 // Pass WebGPU canvas as argument
-export async function startup(canvas: HTMLCanvasElement)
+export async function startup_1(canvas: HTMLCanvasElement)
 {
     // Check if the navigator supports WebGPU
     const adaptor = await navigator.gpu?.requestAdapter();

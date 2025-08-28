@@ -9,13 +9,14 @@
     import { startup_1 } from './1-BasicStart/main';
     import { startup_2 } from './2-ComputeBasics/main';
     import { startup_3 } from './3-VariablesAndUniforms/main';
+    import { startup_4 } from './4-StorageBufferInstancing/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
 
     //================================//
     onMounted(() => {
         if (webgpuCanvas.value) {
-            startup_3(webgpuCanvas.value);
+            startup_4(webgpuCanvas.value);
         }
     });
 </script>

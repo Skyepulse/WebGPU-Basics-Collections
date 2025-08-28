@@ -9,25 +9,22 @@ import fragWGSL from './shader_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice } from '@src/helpers/WebGPUutils';
 import { rand } from '@src/helpers/MathUtils';
+import { createCircleVertices } from '@src/helpers/GeometryUtils';
 
 //================================//
 const kColorOffset = 0;
 const kOffsetOffset = 4;
-const kScaleOffset = 0;
 
-const knumObjects = 100;
+const knumObjects = 50;
 
 //================================//
-interface UniformInfo {
-    uniformBindGroup: GPUBindGroup;
-    uniformBuffer: GPUBuffer;
-    uniformValues: Float32Array;
+interface InstanceInfo {
     scale: number;
 }
 
 //================================//
 // Pass WebGPU canvas as argument
-export async function startup_3(canvas: HTMLCanvasElement)
+export async function startup_4(canvas: HTMLCanvasElement)
 {
     const device: GPUDevice | null = await RequestWebGPUDevice();
     if (device === null || device === undefined) 
@@ -65,34 +62,41 @@ export async function startup_3(canvas: HTMLCanvasElement)
     const scaleUniformBufferSize = 
         2 * 4; // 2 32bit floats
 
-    // Object infos
-    const objectInfos: UniformInfo[] = [];
+    // Storage buffer sizes
+    const staticStorageBufferSize = staticUniformBufferSize * knumObjects;
+    const scaleStorageBufferSize = scaleUniformBufferSize * knumObjects;
 
-    for(let i = 0; i < knumObjects; i++)
+    const CircleVertices = createCircleVertices({ radius: 1, innerRadius: 0.5 });
+    const vertexStorageBufferSize = CircleVertices.byteLength;
+    const numVertices = CircleVertices.length / 2;
+
+    const staticStorageBuffer: GPUBuffer = createBasicStorageBuffer(device, staticStorageBufferSize);
+    const scaleStorageBuffer: GPUBuffer = createBasicStorageBuffer(device, scaleStorageBufferSize);
+    const vertexStorageBuffer: GPUBuffer = createBasicStorageBuffer(device, vertexStorageBufferSize);
+
+    device.queue.writeBuffer(vertexStorageBuffer, 0, CircleVertices as BufferSource);
+    const objectInfos: InstanceInfo[] = [];
     {
-        const staticUniformBuffer = createBasicUniformBuffer(device,staticUniformBufferSize);
-        
+        const staticStorageValues = new Float32Array(staticStorageBufferSize / 4);
+        for( let i = 0; i < knumObjects; i++)
         {
-            const uniformValues = new Float32Array(staticUniformBufferSize / 4);
-            uniformValues.set([rand(0.1), rand(0.1), rand(0.1), 1], kColorOffset);
-            uniformValues.set([rand(-0.9, 0.9), rand(-0.9, 0.9)], kOffsetOffset);
-            device.queue.writeBuffer(staticUniformBuffer, 0, uniformValues as BufferSource);
-        }
+            const dataOffset = i * (staticUniformBufferSize / 4);
 
-        const uniformValues = new Float32Array(scaleUniformBufferSize / 4);
-        const scaleUniformBuffer = createBasicUniformBuffer(device, scaleUniformBufferSize);
-        const uniformBindGroup = createBasicUniformBindGroup(device, basicPipeline.getBindGroupLayout(0), staticUniformBuffer, scaleUniformBuffer);
-        
-        const uniformInfo: UniformInfo = {
-            uniformBindGroup,
-            uniformBuffer: scaleUniformBuffer,
-            uniformValues,
-            scale: rand(0.2, 0.5)
-        };
-        objectInfos.push(uniformInfo);
+            staticStorageValues.set([rand(0.1), rand(0.1), rand(0.1), 1], dataOffset + kColorOffset);
+            staticStorageValues.set([rand(-0.9, 0.9), rand(-0.9, 0.9)], dataOffset + kOffsetOffset);
+
+            const info: InstanceInfo = {
+                scale: rand(0.1, 0.4)
+            };
+            objectInfos.push(info);
+        }
+        device.queue.writeBuffer(staticStorageBuffer, 0, staticStorageValues as BufferSource);
     }
 
-    const basicRenderPassDescriptor = 
+    const storageValues = new Float32Array(scaleStorageBufferSize / 4);
+    const bindGroup: GPUBindGroup = createVertexStorageBindGroup(device, basicPipeline.getBindGroupLayout(0), staticStorageBuffer, scaleStorageBuffer, vertexStorageBuffer);
+
+    const basicRenderPassDescriptor =
         {
             label: 'basic canvas renderPass',
             colorAttachments: [{
@@ -113,7 +117,7 @@ export async function startup_3(canvas: HTMLCanvasElement)
             canvas.height = Math.max(1, Math.min(height, device.limits.maxTextureDimension2D));
         }
 
-        render(device, canvas, webGPUcontext, basicPipeline, basicRenderPassDescriptor as GPURenderPassDescriptor, objectInfos);
+        render(device, canvas, webGPUcontext, basicPipeline, basicRenderPassDescriptor as GPURenderPassDescriptor, objectInfos, bindGroup, storageValues, scaleStorageBuffer, numVertices);
     });
 
     observer.observe(canvas);
@@ -147,7 +151,7 @@ function createBasicPipeline(device: GPUDevice, Vmodule: GPUShaderModule, Fmodul
 }
 
 //================================//
-function render(device: GPUDevice, canvas: HTMLCanvasElement, context: GPUCanvasContext, pipeline: GPURenderPipeline, renderPassDescriptor: GPURenderPassDescriptor, objectInfos: UniformInfo[]) 
+function render(device: GPUDevice, canvas: HTMLCanvasElement, context: GPUCanvasContext, pipeline: GPURenderPipeline, renderPassDescriptor: GPURenderPassDescriptor, objectInfos: InstanceInfo[], bindGroup: GPUBindGroup, storageValues: Float32Array, scaleStorageBuffer: GPUBuffer, numVertices: number) 
 {
     // Set the texture we want to render to
     (renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[])[0].view = context.getCurrentTexture().createView();
@@ -161,13 +165,14 @@ function render(device: GPUDevice, canvas: HTMLCanvasElement, context: GPUCanvas
 
     const aspectRatio = canvas.width / canvas.height;
 
-    for(const uniformInfo of objectInfos)
-    {
-        uniformInfo.uniformValues.set([uniformInfo.scale / aspectRatio, uniformInfo.scale], kScaleOffset);
-        device.queue.writeBuffer(uniformInfo.uniformBuffer, 0, uniformInfo.uniformValues as BufferSource); // Here we are only writing the changing uniform buffer, a.k.a scale
-        pass.setBindGroup(0, uniformInfo.uniformBindGroup);
-        pass.draw(3);
-    }
+    objectInfos.forEach((info, index) => {
+        const offset = 2 * index;
+        storageValues.set([info.scale / aspectRatio, info.scale], offset);
+    });
+    device.queue.writeBuffer(scaleStorageBuffer, 0, storageValues as BufferSource);
+
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(numVertices, knumObjects); // 3 vertices, knumObjects instances
     pass.end();
 
     const commandBuffer: GPUCommandBuffer = encoder.finish();
@@ -175,29 +180,34 @@ function render(device: GPUDevice, canvas: HTMLCanvasElement, context: GPUCanvas
 }
 
 //================================//
-function createBasicUniformBuffer(device: GPUDevice, size: number) {
+function createBasicStorageBuffer(device: GPUDevice, size: number) {
     const buffer = device.createBuffer({
-        label: 'uniform buffer',
+        label: 'storage buffer',
         size,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     });
     return buffer;
 }
 
 //================================//
-function createBasicUniformBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, staticUniformBuffer: GPUBuffer, changingUniformBuffer: GPUBuffer) {
+function createVertexStorageBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, staticStorageBuffer: GPUBuffer, changingStorageBuffer: GPUBuffer, vertexStorageBuffer: GPUBuffer) {
     return device.createBindGroup({
-        label: 'uniform bind group',
+        label: 'storage bind group',
         layout: layout,
         entries: [{
             binding: 0,
             resource: {
-                buffer: staticUniformBuffer
+                buffer: staticStorageBuffer
             }
         }, {
             binding: 1,
             resource: {
-                buffer: changingUniformBuffer
+                buffer: changingStorageBuffer
+            }
+        }, {
+            binding: 2,
+            resource: {
+                buffer: vertexStorageBuffer
             }
         }]
     });

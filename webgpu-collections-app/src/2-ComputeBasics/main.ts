@@ -49,6 +49,8 @@ export async function startup_2(canvas: HTMLCanvasElement)
     console.log("We got this Result: ", result);
 
     resultBuffer.unmap(); // length will be set to 0 and data not accessible
+
+    return null; // No renderer
 }
 
 //================================//

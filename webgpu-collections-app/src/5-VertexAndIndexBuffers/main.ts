@@ -124,6 +124,8 @@ export async function startup_5(canvas: HTMLCanvasElement)
     });
 
     observer.observe(canvas);
+
+    return null; // No renderer
 }
 
 //================================//

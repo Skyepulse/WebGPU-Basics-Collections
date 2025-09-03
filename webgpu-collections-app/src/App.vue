@@ -44,23 +44,38 @@
     import { startup_3 } from './3-VariablesAndUniforms/main';
     import { startup_4 } from './4-StorageBufferInstancing/main';
     import { startup_5 } from './5-VertexAndIndexBuffers/main';
+    import { startup_6 } from './6-Textures/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
+    const currentRenderer = ref<any>(null);
+    const isSwitching = ref(false);
 
-    const numberOfExamples = 5;
-    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5];
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers'];
+    const numberOfExamples = 6;
+    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6];
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Textures'];
 
     // Slider state
     const hoveredIndex = ref<number|null>(null);
     const hoveredButtonTop = ref(0);
     const hoveredButtonHeight = ref(0);
 
-    function selectExample(index: number) {
+    async function selectExample(index: number) {
+        if (isSwitching.value) return; // Prevent multiple clicks while switching
+        isSwitching.value = true;
+
+        if (currentRenderer.value && typeof currentRenderer.value.cleanup === 'function') {
+            await currentRenderer.value.cleanup();
+            currentRenderer.value = null;
+        }
+
         if (webgpuCanvas.value) {
             const fn = startupFunctions[index - 1];
-            if (fn) fn(webgpuCanvas.value);
+            if (fn) currentRenderer.value = await fn(webgpuCanvas.value);
+
+            if (currentRenderer.value != null) console.log(currentRenderer.value);
         }
+
+        isSwitching.value = false;
     }
 
     //================================//

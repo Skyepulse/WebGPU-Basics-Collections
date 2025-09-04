@@ -2,8 +2,8 @@
 import compWGSL from './basic_comp.wgsl?raw';
 
 //================================//
-export async function startup_2(canvas: HTMLCanvasElement)
-{
+export async function startup_2(_canvas: HTMLCanvasElement)
+{    
     const adaptor = await navigator.gpu?.requestAdapter();
     const device = await adaptor?.requestDevice();
 

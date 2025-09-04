@@ -143,7 +143,7 @@ class TextureExampleRenderer
             if ('requestVideoFrameCallback' in video) 
             {
                 video.requestVideoFrameCallback(
-                    (now, metadata) => {
+                    (_now, _metadata) => {
                         resolve();
                     }
                 );
@@ -193,7 +193,6 @@ class TextureExampleRenderer
         let totalTime = 0;
 
         const rotationTime = 10000;
-        const upDownTime = 5000;
 
         // Simple texture video render function
         const render = (now: number) =>

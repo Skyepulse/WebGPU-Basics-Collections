@@ -1,4 +1,19 @@
 // ============================== //
+struct vertexStruct {
+    @location(0) position: vec2f,
+    @location(1) offset: vec2f,
+    @location(2) scale: vec2f,
+};
+
+// ============================== //
+struct MVPBuffer {
+    mvp: array<mat4x4f>,
+};
+
+@group(0) @binding(2)
+var<storage, read> mvpBuffer: MVPBuffer;
+
+// ============================== //
 struct VertexShaderOutput
 {
     @builtin(position) Position : vec4f,
@@ -6,34 +21,14 @@ struct VertexShaderOutput
 };
 
 // ============================== //
-struct Uniforms 
-{
-    matrix: mat4x4f
-}
-
-// ============================== //
-@group(0) @binding(2) var<uniform> uni: Uniforms;
-
-// ============================== //
 @vertex
-fn vs(@builtin(vertex_index) vertex_index: u32) -> VertexShaderOutput
+fn vs(vert: vertexStruct, @builtin(instance_index) instanceIdx: u32) -> VertexShaderOutput
 {
-    // Two triangles for a texture
-    let pos: array<vec2f, 6> = array<vec2f, 6>(
-        //T1
-        vec2f( 0.0,  0.0),  // center
-        vec2f( 1.0,  0.0),  // right, center
-        vec2f( 0.0,  1.0),  // center, top
-
-        // 2st triangle
-        vec2f( 0.0,  1.0),  // center, top
-        vec2f( 1.0,  0.0),  // right, center
-        vec2f( 1.0,  1.0),  // right, top
-    );
-
     var vsOutput: VertexShaderOutput;
-    let xy = pos[vertex_index];
-    vsOutput.Position = uni.matrix * vec4f(xy, 0.0, 1.0);
-    vsOutput.texCoord = xy;
+    let mvp = mvpBuffer.mvp[instanceIdx];
+    let pos = vert.position * vert.scale;
+    vsOutput.Position = mvp * vec4f(pos, 0.0, 1.0);
+    let uv = vert.position * vec2f(0.5, -0.5) + vec2f(0.5, 0.5);
+    vsOutput.texCoord = uv;
     return vsOutput;
 }

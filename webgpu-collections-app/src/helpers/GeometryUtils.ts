@@ -3,9 +3,9 @@ interface VertexInformation
 {
     x: number,
     y: number,
-    r: number,
-    g: number,
-    b: number
+    r?: number,
+    g?: number,
+    b?: number
 }
 
 //================================//
@@ -14,6 +14,36 @@ export interface TopologyInformation
     vertexData: Float32Array,
     indexData: Uint16Array,
     numVertices: number
+}
+
+//================================//
+export function createQuadVertices(): TopologyInformation
+{
+    // Two triangles for a Quad
+    const numVertices = 4;
+    const vertexData: Float32Array = new Float32Array(numVertices * 2); //position only
+    
+    let offset = 0;
+    const addVertex = (vertex: VertexInformation) => {
+        vertexData[offset++] = vertex.x;
+        vertexData[offset++] = vertex.y;
+    };
+
+    addVertex({ x: -1.0, y: -1.0 }); // Bottom left
+    addVertex({ x:  1.0, y: -1.0 }); // Bottom right
+    addVertex({ x: -1.0, y:  1.0 }); // Top left
+    addVertex({ x:  1.0, y:  1.0 }); // Top right
+
+    const indexData = new Uint16Array([
+        0, 1, 2, // First triangle
+        2, 1, 3  // Second triangle
+    ]);
+
+    return {
+        vertexData,
+        indexData,
+        numVertices: indexData.length
+    };
 }
 
 //================================//
@@ -37,9 +67,9 @@ export function createCircleVerticesWithColor(
         vertexData[offset++] = vertex.x;
         vertexData[offset++] = vertex.y;
         offset+=1; // Skip the color (1 byte, 8 bits)
-        colorData[colorOffset++] = vertex.r * 255;
-        colorData[colorOffset++] = vertex.g * 255;
-        colorData[colorOffset++] = vertex.b * 255;
+        colorData[colorOffset++] = (vertex.r ?? 0) * 255;
+        colorData[colorOffset++] = (vertex.g ?? 0) * 255;
+        colorData[colorOffset++] = (vertex.b ?? 0) * 255;
         colorOffset += 9; // Skip the remaining byte and position (1 byte + 8 bytes)
     };
 

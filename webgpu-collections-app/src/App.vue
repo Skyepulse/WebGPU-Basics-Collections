@@ -25,7 +25,9 @@
             </button>
         </div>
         <canvas id="webgpuCanvas" ref="webgpuCanvas" class="w-[90%] h-full"></canvas>
-        
+        <pre id="info" class="absolute top-0 right-0 p-4"></pre>
+        <pre id="utils" class="absolute bottom-0 right-0 p-1 bg-gray-700"></pre>
+
         <!-- Animated slider (width grows left->right via scaleX) -->
         <div
             class="absolute left-[10%] w-[25%] bg-gray-700 text-white flex items-center justify-center font-bold text-lg pointer-events-none select-none shadow-lg origin-left transition-all duration-200"

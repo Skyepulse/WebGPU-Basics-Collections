@@ -4,8 +4,11 @@ import simpleTextureFragWGSL from './simpleTexture_frag.wgsl?raw';
 
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
-import type { ShaderModule } from '@src/helpers/WebGPUutils';
+import type { ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
+import { getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { createQuadVertices, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import {mat4} from 'wgpu-matrix';
+import { rand } from '@src/helpers/MathUtils';
 
 //================================//
 export async function startup_6(canvas: HTMLCanvasElement)
@@ -17,7 +20,10 @@ export async function startup_6(canvas: HTMLCanvasElement)
 }
 
 //================================//
-const kMatrixOffset = 0;
+interface InstanceInfo 
+{
+    scale: number;
+}
 
 //================================//
 // Definition of a class to help with the 
@@ -32,11 +38,28 @@ class TextureExampleRenderer
 
     private simpleTextureModule: ShaderModule | null = null;
     private simpleTexturePipeline: GPURenderPipeline | null = null;
+    private timestampQuerySet: TimestampQuerySet | null = null;
 
     //================================//
     private video: HTMLVideoElement | null = null;
     private animationFrameId: number | null = null;
     private resizeObserver: ResizeObserver | null = null;
+    private infoElement: HTMLElement | null = getInfoElement();
+
+    //================================//
+    private vertexBuffer: GPUBuffer | null = null;
+    private indexBuffer: GPUBuffer | null = null;
+    private staticBuffer: GPUBuffer | null = null;
+    private changingBuffer: GPUBuffer | null = null;
+    private storageBuffer: GPUBuffer | null = null;
+    private perInstanceOffsets: Float32Array | null = null;
+
+    //================================//
+    private static maxObjects = 100;
+    private static minObjects = 1;
+    private numberOfObjects = 10;
+    private newNumberOfObjects = this.numberOfObjects;
+    private slider: HTMLInputElement | null = null;
 
     //================================//
     constructor () {
@@ -46,7 +69,7 @@ class TextureExampleRenderer
     //================================//
     async initialize(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
-        this.device = await RequestWebGPUDevice();
+        this.device = await RequestWebGPUDevice(['timestamp-query']);
         if (this.device === null || this.device === undefined) 
         {
             console.log("Was not able to acquire a WebGPU device.");
@@ -73,11 +96,9 @@ class TextureExampleRenderer
         // Initialize Pipelines
         this.initializePipelines();
 
-        // Load and play the source data video in the background
-        await this.initializeVideo();
+        this.addNumberOfObjectsSlider();
 
-        // By default the simple texture video pipeline is used
-        this.simpleTextureContentInit();
+        await this.startRendering();
     }
 
     //================================//
@@ -100,7 +121,29 @@ class TextureExampleRenderer
                 layout: 'auto',
                 vertex: {
                     module: this.simpleTextureModule.vertex,
-                    entryPoint: 'vs'
+                    entryPoint: 'vs',
+                    buffers: [
+                        {
+                            arrayStride: 2 * 4, // position (vec2f)
+                            attributes: [
+                                { shaderLocation: 0, offset: 0, format: 'float32x2' }
+                            ]
+                        },
+                        {
+                            arrayStride: 2 * 4, // offset (vec2f)
+                            stepMode: 'instance', // Per instance
+                            attributes: [
+                                { shaderLocation: 1, offset: 0, format: 'float32x2' }
+                            ]
+                        },
+                        {
+                            arrayStride: 2 * 4, // scale (vec2f)
+                            stepMode: 'instance',
+                            attributes: [
+                                { shaderLocation: 2, offset: 0, format: 'float32x2' }
+                            ]
+                        }
+                    ],
                 },
                 fragment: {
                     module: this.simpleTextureModule.fragment,
@@ -113,9 +156,40 @@ class TextureExampleRenderer
                 }
             });
         }
+
+        const timeStampQueryCount = 2;
+        if (this.device.features.has('timestamp-query')) {
+
+            const querySet = this.device.createQuerySet({
+                label: 'timestamp query set',
+                type: 'timestamp',
+                count: timeStampQueryCount
+            });
+
+            const resolveBuffer = this.device.createBuffer({
+                label: 'timestamp resolve buffer',
+                size: timeStampQueryCount * 8,
+                usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
+            });
+
+            const resultBuffer = this.device.createBuffer({
+                label: 'timestamp result buffer',
+                size: timeStampQueryCount * 8,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+            });
+
+            this.timestampQuerySet = { querySet, resolveBuffer, resultBuffer };
+        }
     }
 
     // SPECIAL METHODS FOR THE TEXTURE AND VIDEO RENDERING
+    //================================//
+    async startRendering()
+    {
+        await this.smallCleanup();
+        await this.initializeVideo();
+        this.simpleTextureContentInit();
+    }
 
     //================================//
     async initializeVideo()
@@ -179,29 +253,85 @@ class TextureExampleRenderer
             minFilter: 'linear',
         });
 
-        const UniformMatrixBufferSize = 16 * 4; // 4 bytes per float
-        const uniformMatrixBuffer = this.device.createBuffer({
-            label: 'matrix uniform buffer',
-            size: UniformMatrixBufferSize,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        const staticBufferSize =
+            2 * 4; // offset vec2f
+        const changingBufferSize =
+            2 * 4;
+        const storageBufferSize =
+            16 * 4; // MVP mat4x4f
+
+        const staticVertexBufferSize = staticBufferSize * this.numberOfObjects;
+        const changingVertexBufferSize = changingBufferSize * this.numberOfObjects;
+        const mvpStorageBufferSize = storageBufferSize * this.numberOfObjects;
+
+        const quadTopologyInformation: TopologyInformation = createQuadVertices();
+        const vertexBufferSize = quadTopologyInformation.vertexData.byteLength;
+        const numVertices = quadTopologyInformation.numVertices;
+
+        this.vertexBuffer = this.device.createBuffer({
+            label: 'Quad vertex buffer',
+            size: vertexBufferSize,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.vertexBuffer, 0, quadTopologyInformation.vertexData as BufferSource);
+        this.indexBuffer = this.device.createBuffer({
+            label: 'Quad index buffer',
+            size: quadTopologyInformation.indexData.byteLength,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.indexBuffer, 0, quadTopologyInformation.indexData as BufferSource);
+
+        this.staticBuffer = this.device.createBuffer({
+            label: 'Static vertex buffer',
+            size: staticVertexBufferSize,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+        this.changingBuffer = this.device.createBuffer({
+            label: 'Changing vertex buffer',
+            size: changingVertexBufferSize,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+        this.storageBuffer = this.device.createBuffer({
+            label: 'MVP storage buffer',
+            size: mvpStorageBufferSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
 
-        const uniformValues = new Float32Array(UniformMatrixBufferSize / 4);
-        const matrix = uniformValues.subarray(kMatrixOffset, 16);
+        const objectInfos: InstanceInfo[] = [];
+        {
+            const staticVertexValuesF32 = new Float32Array(staticVertexBufferSize / 4);
 
-        let lastTime = performance.now();
+            for (let i = 0; i < this.numberOfObjects; i++)
+            {
+                const dataOffsetF32 = i * (staticBufferSize / 4);
+                staticVertexValuesF32.set([rand(-0.9, 0.9), rand(-0.9, 0.9)], dataOffsetF32); // offset
+                const info: InstanceInfo = {
+                    scale: rand(0.2, 0.6)
+                };
+                objectInfos.push(info);
+            }
+            this.perInstanceOffsets = new Float32Array(staticVertexValuesF32);
+            this.device.queue.writeBuffer(this.staticBuffer, 0, staticVertexValuesF32 as BufferSource);
+        }
+
+        const changingValues = new Float32Array(changingVertexBufferSize / 4);
+        const mvpValues = new Float32Array(mvpStorageBufferSize / 4);
+
+        let then = 0;
         let totalTime = 0;
-
+        let gpuTime = 0;
         const rotationTime = 10000;
 
-        // Simple texture video render function
+        // RENDER LOOP
         const render = (now: number) =>
         {
             if (this.canvas === null || this.device === null || this.context === null) return;
 
-            const dt = lastTime - now;
-            lastTime = now;
+            const dt = now - then;
             totalTime += dt;
+            then = now;
+
+            const startTime = performance.now();
 
             const fov = 60 * Math.PI / 180; // rads
             const aspect = this.canvas.width / this.canvas.height;
@@ -215,6 +345,30 @@ class TextureExampleRenderer
             const view = mat4.lookAt(cameraPos, target, up);
             const VPM = mat4.multiply(projectionMatrix, view);
 
+            const vp = VPM; // Projection + View matrix
+            const angle = (totalTime / rotationTime) * 2 * Math.PI;
+
+            const aspectRatio = (this.canvas.width / this.canvas.height) * 0.5;
+
+            objectInfos.forEach((info, index) => {
+                const CVoffset = index * (changingBufferSize / 4);
+                const MVPOffset = index * (storageBufferSize / 4);
+
+                changingValues.set([info.scale, info.scale], CVoffset); // scale
+
+                const oX = this.perInstanceOffsets![2 * index + 0];
+                const oY = this.perInstanceOffsets![2 * index + 1];
+
+                const M = mat4.create();
+                mat4.copy(vp, M);
+                mat4.translate(M, [oX, oY, 0], M);
+                mat4.rotateX(M, angle, M);
+                mat4.rotateY(M, 0.2 * Math.sin(angle), M);
+                mat4.scale(M, [2 * aspectRatio, 1 * aspectRatio, 1], M);
+
+                mvpValues.set(M, MVPOffset);
+            });
+
             const textureView = this.context.getCurrentTexture().createView();
             const renderPassDescriptor: GPURenderPassDescriptor = {
                 label: 'basic canvas renderPass',
@@ -223,18 +377,23 @@ class TextureExampleRenderer
                     loadOp: 'clear',
                     storeOp: 'store',
                     clearValue: { r: 0.3, g: 0.3, b: 0.3, a: 1 }
-                }]
+                }],
+                ... (this.timestampQuerySet != null && {
+                    timestampWrites: {
+                        querySet: this.timestampQuerySet.querySet,
+                        beginningOfPassWriteIndex: 0,
+                        endOfPassWriteIndex: 1,
+                    }
+                }),
             };
-
-            mat4.copy(VPM, matrix);
-            mat4.rotateX(matrix, totalTime / rotationTime * 2 * Math.PI, matrix);
-            mat4.translate(matrix, [-1.0, 0.5, 0], matrix);
-            // mat4.translate(matrix, [0, Math.sin((totalTime + upDownTime / 2) / upDownTime * 2 * Math.PI) * 0.5, 0], matrix);
-            mat4.scale(matrix, [2, -1, 1], matrix);
 
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
             const pass = encoder.beginRenderPass(renderPassDescriptor);
             pass.setPipeline(this.simpleTexturePipeline!);
+            pass.setVertexBuffer(0, this.vertexBuffer);
+            pass.setVertexBuffer(1, this.staticBuffer);
+            pass.setVertexBuffer(2, this.changingBuffer);
+            pass.setIndexBuffer(this.indexBuffer!, 'uint16');
 
             const texture = this.device.importExternalTexture({source: this.video!});
 
@@ -243,18 +402,53 @@ class TextureExampleRenderer
                 entries: [
                     { binding: 0, resource: sampler},
                     { binding: 1, resource: texture},
-                    { binding: 2, resource: uniformMatrixBuffer}
+                    { binding: 2, resource: { buffer: this.storageBuffer! } }
                 ]
             });
 
-            this.device.queue.writeBuffer(uniformMatrixBuffer, 0, uniformValues);
+            this.device.queue.writeBuffer(this.changingBuffer!, 0, changingValues as BufferSource);
+            this.device.queue.writeBuffer(this.storageBuffer!, 0, mvpValues as BufferSource);
 
             pass.setBindGroup(0, bindGroup);
-            pass.draw(6);
+            pass.drawIndexed(numVertices, this.numberOfObjects);
             pass.end();
+
+            if (this.timestampQuerySet != null)
+            {
+                encoder.resolveQuerySet(
+                    this.timestampQuerySet.querySet,
+                    0, this.timestampQuerySet.querySet.count,
+                    this.timestampQuerySet.resolveBuffer, 0
+                );
+
+                if (this.timestampQuerySet.resultBuffer.mapState === 'unmapped')
+                    encoder.copyBufferToBuffer(this.timestampQuerySet.resolveBuffer, 0, this.timestampQuerySet.resultBuffer, 0, this.timestampQuerySet.resultBuffer.size);
+            }
 
             const commandBuffer = encoder.finish();
             this.device.queue.submit([commandBuffer]);
+
+            if (this.timestampQuerySet != null && this.timestampQuerySet.resultBuffer.mapState === 'unmapped')
+            {
+                this.timestampQuerySet.resultBuffer.mapAsync(GPUMapMode.READ).then(() =>
+                {
+                    const times = new BigUint64Array(this.timestampQuerySet!.resultBuffer.getMappedRange());
+                    gpuTime = Number(times[1] - times[0]); // nanoseconds
+                    this.timestampQuerySet!.resultBuffer.unmap(); // When finished reading the data.
+                });
+            }
+
+            const jsTime = performance.now() - startTime;
+            if ( this.infoElement && this.device )
+            {
+                const content = 
+                `\
+                FPS: ${(1000/dt).toFixed(1)}
+                JS Time: ${jsTime.toFixed(1)} ms
+                GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
+                `
+                this.infoElement.textContent = content;
+            }
 
             this.animationFrameId = requestAnimationFrame(render);
         }
@@ -262,8 +456,10 @@ class TextureExampleRenderer
 
         this.resizeObserver = new ResizeObserver(entries => {
             for (const entry of entries) {
+
                 const width = entry.contentBoxSize[0].inlineSize;
                 const height = entry.contentBoxSize[0].blockSize;
+
                 if (this.canvas && this.device) {
                     this.canvas.width = Math.max(1, Math.min(width, this.device.limits.maxTextureDimension2D));
                     this.canvas.height = Math.max(1, Math.min(height, this.device.limits.maxTextureDimension2D));
@@ -275,8 +471,26 @@ class TextureExampleRenderer
 
     //================================//
     async cleanup() {
-        console.log("Cleaning up resources");
 
+        await this.smallCleanup();
+
+        // Other cleanup tasks
+        if(this.slider)
+        {
+            const utilElement = getUtilElement();
+            // Remove all children
+            if (utilElement !== null) {
+                while (utilElement.firstChild) {
+                    utilElement.removeChild(utilElement.firstChild);
+                }
+            }
+            this.slider = null;
+        }
+    }
+
+    //================================//
+    async smallCleanup()
+    {
         if (this.animationFrameId !== null) {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
@@ -291,6 +505,53 @@ class TextureExampleRenderer
             this.video.load();
             this.video = null;
         }
-        // Optionally: destroy GPU resources if needed
+    }
+
+    //================================//
+    addNumberOfObjectsSlider()
+    {
+        const utilElement = getUtilElement();
+        if (utilElement === null) return;
+
+        const label = document.createElement('label');
+        label.textContent = `Number of Objects: ${this.numberOfObjects}`;
+        label.htmlFor = 'numObjectsSlider';
+        utilElement.appendChild(label);
+
+        this.slider = document.createElement('input');
+        this.slider.type = 'range';
+        this.slider.id = 'numObjectsSlider';
+        this.slider.min = TextureExampleRenderer.minObjects.toString();
+        this.slider.max = TextureExampleRenderer.maxObjects.toString();
+        this.slider.value = this.numberOfObjects.toString();
+        this.slider.step = '1';
+        this.slider.style.width = '150px';
+        utilElement.appendChild(this.slider);
+
+        this.slider.addEventListener('input', (_event) => {
+            if (!this.slider) return;
+            this.newNumberOfObjects = parseInt(this.slider.value, 10);
+            label.textContent = `Number of Objects: ${this.newNumberOfObjects}`;
+        });
+
+        let restarting = false;
+        const commit = async () => {
+            if (restarting) return;     // guard against double-fires (change + pointerup)
+            restarting = true;
+            try {
+                this.numberOfObjects = this.newNumberOfObjects;
+                await this.startRendering();
+            } finally {
+                restarting = false;
+            }
+        };
+
+        // Most browsers: fires when the user releases the slider
+        this.slider.addEventListener('change', commit);
+
+        // Extra safety on some platforms: release events
+        this.slider.addEventListener('pointerup', commit);
+        this.slider.addEventListener('mouseup', commit);
+        this.slider.addEventListener('touchend', commit);
     }
 }

@@ -486,6 +486,13 @@ class TextureExampleRenderer
             }
             this.slider = null;
         }
+
+        if (this.infoElement)
+        {
+            while(this.infoElement.firstChild) {
+                this.infoElement.removeChild(this.infoElement.firstChild);
+            }
+        }
     }
 
     //================================//

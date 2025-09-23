@@ -47,14 +47,15 @@
     import { startup_4 } from './4-StorageBufferInstancing/main';
     import { startup_5 } from './5-VertexAndIndexBuffers/main';
     import { startup_6 } from './6-Textures/main';
+    import { startup_7 } from './7-Game/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
     const currentRenderer = ref<any>(null);
     const isSwitching = ref(false);
 
-    const numberOfExamples = 6;
-    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6];
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Textures'];
+    const numberOfExamples = 7;
+    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7];
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Textures', 'Game'];
 
     // Slider state
     const hoveredIndex = ref<number|null>(null);
@@ -73,8 +74,6 @@
         if (webgpuCanvas.value) {
             const fn = startupFunctions[index - 1];
             if (fn) currentRenderer.value = await fn(webgpuCanvas.value);
-
-            if (currentRenderer.value != null) console.log(currentRenderer.value);
         }
 
         isSwitching.value = false;

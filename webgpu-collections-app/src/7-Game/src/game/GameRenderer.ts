@@ -14,14 +14,13 @@ import type GameManager from "./GameManager";
 import { RequestWebGPUDevice } from "@src/helpers/WebGPUutils";
 import type { ShaderModule, TimestampQuerySet } from "@src/helpers/WebGPUutils";
 import { CreateShaderModule, CreateTimestampQuerySet, ResolveTimestampQuery } from '@src/helpers/WebGPUutils';
+import { createQuadVertices } from '@src/helpers/GeometryUtils';
 
 const positionSize = 2 * 4; // 2 floats, 4 bytes each
 const scaleSize = 2 * 4;    // 2 floats, 4 bytes each
 const colorSize = 1 * 4;    // 4 bytes (1 byte per channel RGBA)
-const verticesPerInstance = 4; // Quad (2 triangles)
 const vertexSize = 2 * 4; // position
 const indicesPerInstance = 6;  // 2 triangles per quad
-const indexSize = 2; // uint16
 
 const initialInstanceSize = 256;
 const screenUniformSize = 16; // Uniform buffers should be 16-byte aligned. We store 2 floats + 2 pad floats.
@@ -37,6 +36,7 @@ class GameRenderer
     private device: GPUDevice | null = null;
     private context: GPUCanvasContext | null = null;
     private presentationFormat: GPUTextureFormat | null = null;
+    private observer: ResizeObserver | null = null;
 
     // Rendering pipeline
     private CubesShaderModule: ShaderModule | null = null;
@@ -51,10 +51,14 @@ class GameRenderer
     private screenUniformBuffer: GPUBuffer | null = null;
     private screenBindGroup: GPUBindGroup | null = null;
 
+    private changingCpuArray: Float32Array = new Float32Array(initialInstanceSize * (positionSize + scaleSize) / 4);
+
     // Members
     private numInstances: number = 0;
     private maxInstances: number = initialInstanceSize;
-    private freeSlots: number[] = [];
+    private nextId: number = 1;
+    private idToIndexMap: Map<number, number> = new Map();
+    private indexToId: number[] = [];
 
     //=============== PUBLIC =================//
     constructor(canvas: HTMLCanvasElement, gameManager: GameManager)
@@ -93,14 +97,109 @@ class GameRenderer
             alphaMode: 'premultiplied'
         });
 
+        this.observer = new ResizeObserver(entries => {
+            for (const entry of entries) {
+
+                const width = entry.contentBoxSize[0].inlineSize;
+                const height = entry.contentBoxSize[0].blockSize;
+
+                if (this.canvas && this.device) {
+                    this.canvas.width = Math.max(1, Math.min(width, this.device.limits.maxTextureDimension2D));
+                    this.canvas.height = Math.max(1, Math.min(height, this.device.limits.maxTextureDimension2D));
+                }
+            }
+        });
+        this.observer.observe(this.canvas);
+
         this.buildBuffers();
         this.initializePipeline();
     }
 
     //================================//
+    public addInstance(position: Float32Array, scale: Float32Array, color: Uint8Array): number | null
+    {
+        if (!this.device || !this.staticBuffer || !this.changingBuffer) return null;
+
+        // Check if there are free slots
+        let instanceIndex: number;
+
+        if (this.numInstances >= this.maxInstances)
+            this.extendBuffers();
+
+        instanceIndex = this.numInstances++;
+
+        this.device.queue.writeBuffer(this.staticBuffer, instanceIndex * colorSize, color as BufferSource);
+
+        const id = this.nextId++;
+        this.indexToId[instanceIndex] = id;
+        this.idToIndexMap.set(id, instanceIndex);
+
+        this.updateInstancePosition(id, position);
+        this.updateInstanceScale(id, scale);
+
+        return id;
+    }
+
+    //================================//
+    public removeInstance(id: number): void
+    {
+        if (!this.device || !this.staticBuffer || !this.changingBuffer) return;
+
+        const instanceIndex = this.idToIndexMap.get(id);
+        if (instanceIndex === undefined) return;
+
+        const lastIndex = this.numInstances - 1;
+
+        if (instanceIndex !== lastIndex) // Need to swap with last
+        {
+            const commandEncoder = this.device.createCommandEncoder({ label: 'Remove instance encoder' });
+
+            commandEncoder.copyBufferToBuffer(this.staticBuffer, lastIndex * colorSize, this.staticBuffer, instanceIndex * colorSize, colorSize);
+            this.device.queue.submit([commandEncoder.finish()]);
+
+            const a = this.changingCpuArray;
+            const dstBase = instanceIndex * (positionSize + scaleSize) / 4;
+            const srcBase = lastIndex * (positionSize + scaleSize) / 4;
+            a[dstBase + 0] = a[srcBase + 0]; // pos.x
+            a[dstBase + 1] = a[srcBase + 1]; // pos.y
+            a[dstBase + 2] = a[srcBase + 2]; // scale.x
+            a[dstBase + 3] = a[srcBase + 3]; // scale.y
+
+            const movedId = this.indexToId[lastIndex];
+            this.indexToId[instanceIndex] = movedId;
+            this.idToIndexMap.set(movedId, instanceIndex);
+        }
+
+        // In any case, pop the last
+        this.idToIndexMap.delete(id);
+        this.indexToId.pop();
+        this.numInstances--;
+    }
+
+    //================================//
+    public updateInstanceScale(id: number, scale: Float32Array): void
+    {
+        const instanceIndex = this.idToIndexMap.get(id);
+        if (instanceIndex === undefined) return;
+
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 2] = scale[0];
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 3] = scale[1];
+    }
+
+    //================================//
+    public updateInstancePosition(id: number, position: Float32Array): void
+    {
+        const instanceIndex = this.idToIndexMap.get(id);
+        if (instanceIndex === undefined) return;
+
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 0] = position[0];
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 1] = position[1];
+    }
+
+    //================================//
     public render()
     {
-        if (!this.device || !this.context || !this.presentationFormat || !this.CubesPipeline) return;
+        if (!this.device || !this.context || !this.presentationFormat || !this.CubesPipeline || !this.changingBuffer) return;
 
         const textureView = this.context.getCurrentTexture().createView();
         const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -120,7 +219,11 @@ class GameRenderer
             }),
         };
 
+        const byteLen = this.numInstances * (positionSize + scaleSize);
+
         const encoder = this.device.createCommandEncoder({ label: 'canvas render encoder' });
+        this.device.queue.writeBuffer(this.changingBuffer, 0, this.changingCpuArray.buffer, 0, byteLen);
+
         const pass = encoder.beginRenderPass(renderPassDescriptor);
         pass.setPipeline(this.CubesPipeline);
         pass.setVertexBuffer(0, this.vertexBuffer as GPUBuffer);
@@ -128,7 +231,7 @@ class GameRenderer
         pass.setVertexBuffer(2, this.changingBuffer as GPUBuffer);
         pass.setIndexBuffer(this.indexBuffer as GPUBuffer, 'uint16');
         pass.setBindGroup(0, this.screenBindGroup as GPUBindGroup); 
-
+        
         pass.drawIndexed(indicesPerInstance, this.numInstances, 0, 0, 0);
         pass.end();
 
@@ -150,30 +253,36 @@ class GameRenderer
     {
         if (!this.device) return;
 
-        const vertexBufferSize = this.maxInstances * verticesPerInstance * vertexSize;
-        const indexBufferSize = this.maxInstances * indicesPerInstance * indexSize;
         const staticBufferSize = this.maxInstances * (colorSize);
         const changingBufferSize = this.maxInstances * (positionSize + scaleSize);
+
+        const quadTopology = createQuadVertices();
+        const vertexBufferSize = quadTopology.vertexData.byteLength;
+        const indexBufferSize = quadTopology.indexData.byteLength;
 
         this.vertexBuffer = this.device.createBuffer({
             label: 'Quad vertex buffer',
             size: vertexBufferSize,
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
         });
+        this.device.queue.writeBuffer(this.vertexBuffer, 0, quadTopology.vertexData as BufferSource);
+
         this.indexBuffer = this.device.createBuffer({
             label: 'Quad index buffer',
             size: indexBufferSize,
             usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST
         });
+        this.device.queue.writeBuffer(this.indexBuffer, 0, quadTopology.indexData as BufferSource);
+
         this.staticBuffer = this.device.createBuffer({
             label: 'Quad static instance buffer',
             size: staticBufferSize,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
         });
         this.changingBuffer = this.device.createBuffer({    
             label: 'Quad changing instance buffer',
             size: changingBufferSize,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
         });
         this.timestampQuerySet = CreateTimestampQuerySet(this.device, 2);
 
@@ -186,6 +295,43 @@ class GameRenderer
         // Write world size to uniform buffer (won't change)
         const screenData = new Float32Array([xWorldSize, yWorldSize, 0, 0]);
         this.device.queue.writeBuffer(this.screenUniformBuffer, 0, screenData.buffer, screenData.byteOffset, screenData.byteLength);
+    }
+
+    //================================//
+    private extendBuffers()
+    {
+        if (!this.device || !this.staticBuffer || !this.changingBuffer || !this.indexBuffer) return;
+
+        this.maxInstances *= 2;
+
+        const newStaticBufferSize = this.maxInstances * (colorSize);
+        const newChangingBufferSize = this.maxInstances * (positionSize + scaleSize);
+
+        const newStaticBuffer = this.device.createBuffer({
+            label: 'Extended static instance buffer',
+            size: newStaticBufferSize,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+        });
+        const newChangingBuffer = this.device.createBuffer({
+            label: 'Extended changing instance buffer',
+            size: newChangingBufferSize,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+        });
+
+        // Copy old data to new buffers (and cpu array)
+        const commandEncoder = this.device.createCommandEncoder({ label: 'Extend buffer encoder' });
+        commandEncoder.copyBufferToBuffer(this.staticBuffer, 0, newStaticBuffer, 0, this.staticBuffer.size);
+        this.device.queue.submit([commandEncoder.finish()]);
+
+        const oldChangingArray = this.changingCpuArray;
+        this.changingCpuArray = new Float32Array(this.maxInstances * (positionSize + scaleSize) / 4);
+        this.changingCpuArray.set(oldChangingArray);
+
+        this.staticBuffer.destroy();
+        this.changingBuffer.destroy();
+
+        this.staticBuffer = newStaticBuffer;
+        this.changingBuffer = newChangingBuffer;
     }
 
     //================================//

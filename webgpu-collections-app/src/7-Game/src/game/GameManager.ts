@@ -7,14 +7,8 @@
 
 //================================//
 import GameRenderer from "./GameRenderer";
-import { rand, randomPosInRect, randomColorUint8 } from "@src/helpers/MathUtils";
-
-interface GameObject {
-    position: Float32Array; // vec2f
-    scale: Float32Array; // vec2f
-    color: Uint8Array; // vec4u8
-    id: number;
-}
+import RigidBox from "./RigidBox";
+import { rand, randomPosInRectRot, randomColorUint8 } from "@src/helpers/MathUtils";
 
 //================================//
 class GameManager
@@ -26,7 +20,7 @@ class GameManager
     private canvas: HTMLCanvasElement | null = null;
 
     private gameRenderer: GameRenderer;
-    private gameObjects: GameObject[] = [];
+    private rigidBoxes: RigidBox[] = [];
 
     private lastFrameTime: number = 0;
 
@@ -44,18 +38,7 @@ class GameManager
 
         // Game Renderer
         await this.gameRenderer.initialize();
-
-        for (let i = 0; i < 1000; i++)
-        {
-            const pos = randomPosInRect(0, 0, 100, 50);
-            const color = randomColorUint8();
-            const scale = new Float32Array([rand(0.5, 2), rand(0.5, 2)]);
-
-            const id = this.gameRenderer.addInstance(pos, scale, color);
-            if (id !== null) {
-                this.gameObjects.push({ position: pos, scale: scale, color: color, id: id });
-            }
-        }
+        this.initializeWindowEvents();
 
         this.startMainLoop();
     }
@@ -120,21 +103,50 @@ class GameManager
             const dt = now - this.lastFrameTime;
             this.lastFrameTime = now;
 
-            for (let obj of this.gameObjects)
-            {
-                obj.position[0] += dt * 0.1;
-                if (obj.position[0] > 100) {
-                    obj.position[0] = 0;
-                }
-                this.gameRenderer.updateInstancePosition(obj.id, obj.position);
-            }
-
-            // this.log(`Frame @ ${now.toFixed(2)}ms`);
             this.gameRenderer.render();
             this.rafID = requestAnimationFrame(frame);
         }
 
         this.rafID = requestAnimationFrame(frame);
+    }
+
+    //================================//
+    public addRigidBox(
+        pos: Float32Array = randomPosInRectRot(0, 0, GameRenderer.xWorldSize, GameRenderer.yWorldSize), 
+        scale: Float32Array = new Float32Array([rand(2, 10), rand(2, 10)]), 
+        velocity: Float32Array = new Float32Array([0, 0]),
+        color: Uint8Array = randomColorUint8()
+    ): void
+    {
+        const box = new RigidBox(scale, color, 1.0, 1.0, pos, velocity);
+
+        box.id = this.gameRenderer.addInstanceBox(box);
+        if (box.id !== -1) {
+            this.rigidBoxes.push(box);
+        } else {
+            this.logWarn("Failed to add box instance to renderer.");
+        }
+    }
+
+    //================================//
+    public initializeWindowEvents(): void
+    {
+        // Add box on click
+        window.addEventListener('click', (event: MouseEvent) => {
+            
+            // Print where in the canvas was clicked
+            if (!this.canvas) return;
+
+            const rect = this.canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            
+            const canvasX = (x / this.canvas.width) * GameRenderer.xWorldSize;
+            const canvasY = (1.0 - (y / this.canvas.height)) * GameRenderer.yWorldSize;
+            const pos = new Float32Array([canvasX, canvasY, rand(0, Math.PI * 2)]);
+
+            this.addRigidBox(pos);
+        });
     }
 }
 

@@ -2,7 +2,7 @@
 struct vertexStruct {
     @location(0) position: vec2f,
     @location(1) color: vec4f,
-    @location(2) worldPos: vec2f,
+    @location(2) worldPos: vec3f,
     @location(3) scale: vec2f,
 };
 
@@ -28,12 +28,19 @@ fn vs(
 {
     var out: OurVertexShaderOutput;
 
-    let world : vec2f = vert.worldPos + vert.position * vert.scale;
+    let rotation : f32 = vert.worldPos.z;
+    let cosR : f32 = cos(rotation);
+    let sinR : f32 = sin(rotation);
+
+    let scaledPos : vec2f = vert.position * vert.scale;
+    let rotatedX : f32 = scaledPos.x * cosR - scaledPos.y * sinR;
+    let rotatedY : f32 = scaledPos.x * sinR + scaledPos.y * cosR;
+    let worldRotated : vec2f = vert.worldPos.xy + vec2f(rotatedX, rotatedY);
 
     // Map world [0..worldSize] -> NDC [-1..1]
     let ndc : vec2f = vec2f(
-        (world.x / uScreen.worldSize.x) * 2.0 - 1.0,
-        (world.y / uScreen.worldSize.y) * 2.0 - 1.0
+        (worldRotated.x / uScreen.worldSize.x) * 2.0 - 1.0,
+        (worldRotated.y / uScreen.worldSize.y) * 2.0 - 1.0
     );
 
     out.position = vec4f(ndc, 0.0, 1.0);

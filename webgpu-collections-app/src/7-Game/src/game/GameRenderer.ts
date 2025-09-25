@@ -11,12 +11,13 @@ import cubeFragWGSL from '../shader/cubeShader_frag.wgsl?raw';
 
 //================================//
 import type GameManager from "./GameManager";
+import RigidBox from "./RigidBox";
 import { RequestWebGPUDevice } from "@src/helpers/WebGPUutils";
 import type { ShaderModule, TimestampQuerySet } from "@src/helpers/WebGPUutils";
 import { CreateShaderModule, CreateTimestampQuerySet, ResolveTimestampQuery } from '@src/helpers/WebGPUutils';
 import { createQuadVertices } from '@src/helpers/GeometryUtils';
 
-const positionSize = 2 * 4; // 2 floats, 4 bytes each
+const positionSize = 3 * 4; // 2 floats for posx posy and rotation, 4 bytes each
 const scaleSize = 2 * 4;    // 2 floats, 4 bytes each
 const colorSize = 1 * 4;    // 4 bytes (1 byte per channel RGBA)
 const vertexSize = 2 * 4; // position
@@ -24,8 +25,6 @@ const indicesPerInstance = 6;  // 2 triangles per quad
 
 const initialInstanceSize = 256;
 const screenUniformSize = 16; // Uniform buffers should be 16-byte aligned. We store 2 floats + 2 pad floats.
-const xWorldSize = 100;
-const yWorldSize = 50;
 
 //================================//
 class GameRenderer
@@ -59,6 +58,10 @@ class GameRenderer
     private nextId: number = 1;
     private idToIndexMap: Map<number, number> = new Map();
     private indexToId: number[] = [];
+
+    // Static world size (matches physics world)
+    static xWorldSize: number = 100;
+    static yWorldSize: number = 60;
 
     //=============== PUBLIC =================//
     constructor(canvas: HTMLCanvasElement, gameManager: GameManager)
@@ -116,9 +119,15 @@ class GameRenderer
     }
 
     //================================//
-    public addInstance(position: Float32Array, scale: Float32Array, color: Uint8Array): number | null
+    public addInstanceBox(RigidBox: RigidBox): number
     {
-        if (!this.device || !this.staticBuffer || !this.changingBuffer) return null;
+        return this.addInstance(RigidBox.getPosition(), RigidBox.getScale(), RigidBox.getColor());
+    }
+
+    //================================//
+    public addInstance(position: Float32Array, scale: Float32Array, color: Uint8Array): number
+    {
+        if (!this.device || !this.staticBuffer || !this.changingBuffer) return -1;
 
         // Check if there are free slots
         let instanceIndex: number;
@@ -182,8 +191,8 @@ class GameRenderer
         const instanceIndex = this.idToIndexMap.get(id);
         if (instanceIndex === undefined) return;
 
-        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 2] = scale[0];
-        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 3] = scale[1];
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 3] = scale[0];
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 4] = scale[1];
     }
 
     //================================//
@@ -192,8 +201,11 @@ class GameRenderer
         const instanceIndex = this.idToIndexMap.get(id);
         if (instanceIndex === undefined) return;
 
+        console.log(position);
+
         this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 0] = position[0];
         this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 1] = position[1];
+        this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 2] = position[2];
     }
 
     //================================//
@@ -293,7 +305,7 @@ class GameRenderer
         });
 
         // Write world size to uniform buffer (won't change)
-        const screenData = new Float32Array([xWorldSize, yWorldSize, 0, 0]);
+        const screenData = new Float32Array([GameRenderer.xWorldSize, GameRenderer.yWorldSize, 0, 0]);
         this.device.queue.writeBuffer(this.screenUniformBuffer, 0, screenData.buffer, screenData.byteOffset, screenData.byteLength);
     }
 
@@ -370,7 +382,7 @@ class GameRenderer
                         arrayStride: positionSize + scaleSize,
                         stepMode: 'instance',
                         attributes: [
-                            { shaderLocation: 2, offset: 0, format: 'float32x2' }, // Instance position
+                            { shaderLocation: 2, offset: 0, format: 'float32x3' }, // Instance position (x,y,rotation)
                             { shaderLocation: 3, offset: positionSize, format: 'float32x2' }  // Instance scale
                         ]
                     }

@@ -29,10 +29,10 @@ export function createQuadVertices(): TopologyInformation
         vertexData[offset++] = vertex.y;
     };
 
-    addVertex({ x: -1.0, y: -1.0 }); // Bottom left
-    addVertex({ x:  1.0, y: -1.0 }); // Bottom right
-    addVertex({ x: -1.0, y:  1.0 }); // Top left
-    addVertex({ x:  1.0, y:  1.0 }); // Top right
+    addVertex({ x: -0.5, y: -0.5 }); // Bottom left
+    addVertex({ x:  0.5, y: -0.5 }); // Bottom right
+    addVertex({ x: -0.5, y:  0.5 }); // Top left
+    addVertex({ x:  0.5, y:  0.5 }); // Top right
 
     const indexData = new Uint16Array([
         0, 1, 2, // First triangle

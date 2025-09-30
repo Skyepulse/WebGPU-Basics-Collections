@@ -16,6 +16,7 @@ import { RequestWebGPUDevice } from "@src/helpers/WebGPUutils";
 import type { ShaderModule, TimestampQuerySet } from "@src/helpers/WebGPUutils";
 import { CreateShaderModule, CreateTimestampQuerySet, ResolveTimestampQuery } from '@src/helpers/WebGPUutils';
 import { createQuadVertices } from '@src/helpers/GeometryUtils';
+import * as glm from 'gl-matrix';
 
 const positionSize = 3 * 4; // 2 floats for posx posy and rotation, 4 bytes each
 const scaleSize = 2 * 4;    // 2 floats, 4 bytes each
@@ -125,7 +126,7 @@ class GameRenderer
     }
 
     //================================//
-    public addInstance(position: Float32Array, scale: Float32Array, color: Uint8Array): number
+    public addInstance(position: glm.vec3, scale: glm.vec2, color: Uint8Array): number
     {
         if (!this.device || !this.staticBuffer || !this.changingBuffer) return -1;
 
@@ -143,8 +144,8 @@ class GameRenderer
         this.indexToId[instanceIndex] = id;
         this.idToIndexMap.set(id, instanceIndex);
 
-        this.updateInstancePosition(id, position);
-        this.updateInstanceScale(id, scale);
+        this.updateInstancePosition(id, position as Float32Array);
+        this.updateInstanceScale(id, scale as Float32Array);
 
         return id;
     }

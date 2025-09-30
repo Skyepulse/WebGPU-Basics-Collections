@@ -6,6 +6,7 @@
  */
 
 //================================//
+import * as glm from 'gl-matrix';
 import GameRenderer from "./GameRenderer";
 import RigidBox from "./RigidBox";
 import { rand, randomPosInRectRot, randomColorUint8 } from "@src/helpers/MathUtils";
@@ -21,6 +22,7 @@ class GameManager
 
     private gameRenderer: GameRenderer;
     private rigidBoxes: RigidBox[] = [];
+    // private forces: Force[] = [];
 
     private lastFrameTime: number = 0;
 
@@ -103,6 +105,8 @@ class GameManager
             const dt = now - this.lastFrameTime;
             this.lastFrameTime = now;
 
+            this.log("Frame diff:" + dt.toFixed(2) + "ms");
+
             this.gameRenderer.render();
             this.rafID = requestAnimationFrame(frame);
         }
@@ -112,9 +116,9 @@ class GameManager
 
     //================================//
     public addRigidBox(
-        pos: Float32Array = randomPosInRectRot(0, 0, GameRenderer.xWorldSize, GameRenderer.yWorldSize), 
-        scale: Float32Array = new Float32Array([rand(2, 10), rand(2, 10)]), 
-        velocity: Float32Array = new Float32Array([0, 0]),
+        pos: glm.vec3 = randomPosInRectRot(0, 0, GameRenderer.xWorldSize, GameRenderer.yWorldSize), 
+        scale: glm.vec2 = glm.vec2.fromValues(rand(2, 10), rand(2, 10)), 
+        velocity: glm.vec3 = glm.vec3.fromValues(0, 0, 0),
         color: Uint8Array = randomColorUint8()
     ): void
     {
@@ -143,7 +147,7 @@ class GameManager
             
             const canvasX = (x / this.canvas.width) * GameRenderer.xWorldSize;
             const canvasY = (1.0 - (y / this.canvas.height)) * GameRenderer.yWorldSize;
-            const pos = new Float32Array([canvasX, canvasY, rand(0, Math.PI * 2)]);
+            const pos = glm.vec3.fromValues(canvasX, canvasY, rand(0, Math.PI * 2));
 
             this.addRigidBox(pos);
         });

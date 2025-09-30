@@ -5,7 +5,7 @@
  *
  */
 
-import { dot2 } from "@src/helpers/MathUtils";
+import * as glm from 'gl-matrix';
 
 //================================//
 class RigidBox 
@@ -18,20 +18,23 @@ class RigidBox
 
     private friction: number;
 
-    private position: Float32Array;
-    private velocity: Float32Array;
-    private prevVelocity: Float32Array;
+    private position: glm.vec3;
+    private velocity: glm.vec3;
+    private prevVelocity: glm.vec3;
 
     private color: Uint8Array;
     private staticBody: boolean;
 
     private moment: number = 0;
     private radius: number = 0;
-    
+
+    public lastPosition: glm.vec3 = glm.vec3.fromValues(0,0,0);
+    public inertial: glm.vec3 = glm.vec3.fromValues(0, 0, 0);
+
     public id = -1;
 
     //=============== PUBLIC =================//
-    constructor(scale: Float32Array, color: Uint8Array, density: number, friction: number, position: Float32Array, velocity: Float32Array)
+    constructor(scale: glm.vec2, color: Uint8Array, density: number, friction: number, position: glm.vec3, velocity: glm.vec3)
     {
         this.width          = scale[0];
         this.height         = scale[1];
@@ -44,21 +47,29 @@ class RigidBox
         this.position       = position;
         this.velocity       = velocity;
         this.prevVelocity   = velocity;
-        this.moment         = this.mass * dot2(scale, scale) / 12;
-        this.radius         = Math.sqrt(dot2(scale, scale)) * 0.5;
+        this.moment         = this.mass * glm.vec2.dot(scale, scale) / 12;
+        this.radius         = Math.sqrt(glm.vec2.dot(scale, scale)) * 0.5;
 
         this.color          = color;
     }
 
     //================================//
-    public getScale(): Float32Array { return new Float32Array([this.width, this.height]); }
+    public getScale(): glm.vec2 { return glm.vec2.fromValues(this.width, this.height); }
     public getDensity(): number { return this.density; }
     public getMass(): number { return this.mass; }
-    public getPosition(): Float32Array { return this.position; }
+    public getPosition(): glm.vec3 { return this.position; }
+    public getPos2(): glm.vec2 { return glm.vec2.fromValues(this.position[0], this.position[1]); }
     public getColor(): Uint8Array { return this.color; }
 
+    public getVelocity(): glm.vec3 { return this.velocity; }
+    public getPrevVelocity(): glm.vec3 { return this.prevVelocity; }
+    public getFriction(): number { return this.friction; }
+    public isStatic(): boolean { return this.staticBody; }
+    public getMoment(): number { return this.moment; }
+    public getRadius(): number { return this.radius; }
+
     //================================//
-    public setPosition(position: Float32Array): void { if (!this.staticBody) this.position = position; }
+    public setPosition(position: glm.vec3): void { if (!this.staticBody) this.position = position; }
     public setColor(color: Uint8Array): void { this.color = color; }
 }
 

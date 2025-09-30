@@ -18,6 +18,7 @@
     "@vue/tsconfig": "^0.7.0",
     "@webgpu/types": "^0.1.64",
     "autoprefixer": "^10.4.21",
+    "gl-matrix": "^3.4.4",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.11",
     "typescript": "~5.8.3",

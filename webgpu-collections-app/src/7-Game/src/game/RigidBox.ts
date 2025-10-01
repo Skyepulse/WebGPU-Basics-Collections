@@ -68,6 +68,16 @@ class RigidBox
     public getMoment(): number { return this.moment; }
     public getRadius(): number { return this.radius; }
 
+    public getRotationMatrix(): glm.mat2
+    {
+        const c = Math.cos(this.position[2]);
+        const s = Math.sin(this.position[2]);
+
+        const mat = glm.mat2.fromValues( c, -s,
+                                         s,  c) ;
+        return mat;
+    }
+
     //================================//
     public setPosition(position: glm.vec3): void { if (!this.staticBody) this.position = position; }
     public setColor(color: Uint8Array): void { this.color = color; }

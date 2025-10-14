@@ -6,6 +6,7 @@
  */
 
 import * as glm from 'gl-matrix';
+import Force from './Force';
 
 //================================//
 class RigidBox 
@@ -20,7 +21,7 @@ class RigidBox
 
     private position: glm.vec3;
     private velocity: glm.vec3;
-    private prevVelocity: glm.vec3;
+    public prevVelocity: glm.vec3;
 
     private color: Uint8Array;
     private staticBody: boolean;
@@ -32,6 +33,8 @@ class RigidBox
     public inertial: glm.vec3 = glm.vec3.fromValues(0, 0, 0);
 
     public id = -1;
+
+    public forces: Force[] = [];
 
     //=============== PUBLIC =================//
     constructor(scale: glm.vec2, color: Uint8Array, density: number, friction: number, position: glm.vec3, velocity: glm.vec3)
@@ -68,6 +71,10 @@ class RigidBox
     public getMoment(): number { return this.moment; }
     public getRadius(): number { return this.radius; }
 
+    //================================//
+    public setVelocity(velocity: glm.vec3): void { if (!this.staticBody) this.velocity = velocity; }
+
+    //================================//
     public getRotationMatrix(): glm.mat2
     {
         const c = Math.cos(this.position[2]);
@@ -80,7 +87,23 @@ class RigidBox
 
     //================================//
     public setPosition(position: glm.vec3): void { if (!this.staticBody) this.position = position; }
+
+    //================================//
     public setColor(color: Uint8Array): void { this.color = color; }
+
+    //================================//
+    public isConstrainedTo(body: RigidBox): boolean
+    {
+        for (let i = 0; i < this.forces.length; ++i)
+        {
+            const f = this.forces[i];
+
+            if (f.bodyA === this && f.bodyB === body) return true;
+            if (f.bodyB === this && f.bodyA === body) return true;
+        }
+
+        return false;
+    }
 }
 
 export default RigidBox;

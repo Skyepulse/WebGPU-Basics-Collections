@@ -103,12 +103,48 @@ const Flip = (cd: ContactDetails): void =>
 }
 
 //================================//
+function cloneDetails(cd: ContactDetails): ContactDetails {
+  return {
+    inEdge1: cd.inEdge1,
+    outEdge1: cd.outEdge1,
+    inEdge2: cd.inEdge2,
+    outEdge2: cd.outEdge2,
+    ID: cd.ID
+  };
+}
+
+//================================//
+function packFeatureID(cd: ContactDetails): number {
+  // pack four 8-bit edge tags into a 32-bit int
+  return ((cd.inEdge1  & 0xFF)      ) |
+         ((cd.outEdge1 & 0xFF) << 8 ) |
+         ((cd.inEdge2  & 0xFF) << 16) |
+         ((cd.outEdge2 & 0xFF) << 24);
+}
+
+//================================//
+function makeEmptyContact(): ContactPoint {
+  return {
+    details: createDefaultContactDetails(),
+    pA: glm.vec2.create(),
+    pB: glm.vec2.create(),
+    n:  glm.vec2.create(),
+    JacNormA: glm.vec3.create(),
+    JacNormB: glm.vec3.create(),
+    JacTangA: glm.vec3.create(),
+    JacTangB: glm.vec3.create(),
+    C0: glm.vec2.create(),
+    stick: false
+  };
+}
+
+//================================//
 /* Clips a segment to line, meaning return the portion of the segment on the side of the line defined by normal and offset
  * Sutherland–Hodgman clipping algorithm
  * Selects vertices on the visible side of the line
  * https://en.wikipedia.org/wiki/Sutherland%E2%80%93Hodgman_algorithm
  */
-const ClipSegmentToLine = (vOut: ClipVertex[], vIn: ClipVertex[], normal: glm.vec2, offset: number, vertexIndexA: number): number =>
+const ClipSegmentToLine = (vOut: ClipVertex[], vIn: ClipVertex[], normal: glm.vec2, offset: number, clipEdge: Edges): number =>
 {
     let numOut: number = 0;
 
@@ -117,29 +153,30 @@ const ClipSegmentToLine = (vOut: ClipVertex[], vIn: ClipVertex[], normal: glm.ve
     const d1: number = glm.vec2.dot(normal, vIn[1].v) - offset;
 
     // Are we behind or in front of the plane?
-    if (d0 <= 0) vOut[numOut++] = vIn[0]; // vIn[0] is inside
-    if (d1 <= 0) vOut[numOut++] = vIn[1]; // vIn[1] is inside
+    if (d0 <= 0) vOut[numOut++] = { v: glm.vec2.clone(vIn[0].v), cd: cloneDetails(vIn[0].cd) }; // vIn[0] is inside
+    if (d1 <= 0) vOut[numOut++] = { v: glm.vec2.clone(vIn[1].v), cd: cloneDetails(vIn[1].cd) }; // vIn[1] is inside
 
     // If we have opposite side of the plane (i.e the lines intersect)
     if (d0 * d1 < 0) // Less than zero means they are on opposite sides of the line
     {
         // numOut has to be 1 here
         const interp: number = d0 / (d0 - d1);
-        vOut[numOut].v = glm.vec2.lerp(glm.vec2.create(), vIn[0].v, vIn[1].v, interp);
+        const v = glm.vec2.lerp(glm.vec2.create(), vIn[0].v, vIn[1].v, interp);
 
+        let cd = cloneDetails(d0 > 0 ? vIn[0].cd : vIn[1].cd);
         if (d0 > 0) // vIn[0] is outside
         {
-            vOut[numOut].cd = vIn[0].cd;
-            vOut[numOut].cd.inEdge1 = vertexIndexA;
-            vOut[numOut].cd.inEdge2 = Edges.NO_EDGE; // Not touching body 2
+            cd.inEdge1  = clipEdge;
+            cd.inEdge2  = Edges.NO_EDGE;
         }
         else    
         { // vIn[1] is outside
-            vOut[numOut].cd = vIn[1].cd;
-            vOut[numOut].cd.inEdge1 = vertexIndexA;
-            vOut[numOut].cd.inEdge2 = Edges.NO_EDGE; // Not touching body 2
+            cd.outEdge1 = clipEdge;
+            cd.outEdge2 = Edges.NO_EDGE;
         }
-        ++numOut;
+        cd.ID = packFeatureID(cd);
+
+        vOut[numOut++] = { v, cd };
     }
 
     return numOut;
@@ -238,30 +275,35 @@ class Manifold extends Force
     {
         this.friction = Math.sqrt(this.bodyA.getFriction() * this.bodyB.getFriction());
 
-        this.oldContacts = this.contacts;
-        const oldPenalty: number[] = this.penalty;
-        const oldLambda: number[] = this.lambda;
-        const oldStick: boolean[] = this.contacts.map((c) => c.stick);
+        this.oldContacts = this.contacts.slice();
+        const oldPenalty: number[] = this.penalty.slice();
+        const oldLambda: number[] = this.lambda.slice();
+        const oldStick: boolean[] = this.oldContacts.map((c) => c.stick);
 
         // Compute new contacts
-        this.contacts = []; // TODO
-
+        this.contacts.length = 0;
+        const numContacts: number = Manifold.collide(this.bodyA, this.bodyB, this.contacts);
+        
         // Merge contacts based on old contact info
-        for(let i =0; i < this.contacts.length; ++i)
-        {
-            if(this.oldContacts.length > i && this.contacts[i].details.ID === this.oldContacts[i].details.ID)
-            {
-                this.penalty[i * 2 + 0] = oldPenalty[i * 2 + 0];
-                this.penalty[i * 2 + 1] = oldPenalty[i * 2 + 1];
-                this.lambda[i * 2 + 0] = oldLambda[i * 2 + 0];
-                this.lambda[i * 2 + 1] = oldLambda[i * 2 + 1];
-                this.contacts[i].stick = oldStick[i];
+        for (let i = 0; i < this.contacts.length; ++i) {
+            // default warmstart state
+            this.penalty[i*2+0] = 0; this.penalty[i*2+1] = 0;
+            this.lambda[i*2+0]  = 0; this.lambda[i*2+1]  = 0;
+            this.contacts[i].stick = false;
 
-                // Static friction means we keep the same points of contact
-                if(this.contacts[i].stick)
-                {
-                    this.contacts[i].pA = this.oldContacts[i].pA;
-                    this.contacts[i].pB = this.oldContacts[i].pB;
+            const id = this.contacts[i].details.ID;
+            const j = this.oldContacts.findIndex(oc => oc.details.ID === id);
+            if (j !== -1) {
+                this.penalty[i*2+0] = oldPenalty[j*2+0];
+                this.penalty[i*2+1] = oldPenalty[j*2+1];
+                this.lambda[i*2+0]  = oldLambda[j*2+0];
+                this.lambda[i*2+1]  = oldLambda[j*2+1];
+                this.contacts[i].stick = oldStick[j];
+
+                // If sticking, reuse the old local offsets for better static friction
+                if (this.contacts[i].stick) {
+                this.contacts[i].pA = glm.vec2.clone(this.oldContacts[j].pA);
+                this.contacts[i].pB = glm.vec2.clone(this.oldContacts[j].pB);
                 }
             }
         }
@@ -272,21 +314,19 @@ class Manifold extends Force
             // Friction contact based on normal and tangential
             const n: glm.vec2 = this.contacts[i].n;
             const t: glm.vec2 = glm.vec2.fromValues( n[1], -n[0] );
-            const basis: glm.mat2 = glm.mat2.fromValues(    n[0], n[1], 
-                                                            t[0], t[1]  );
+            const basis: glm.mat2 = glm.mat2.fromValues(    n[0], t[0], 
+                                                            n[1], t[1]  );
 
-            const rotatedAW: glm.vec2 = glm.vec2.create();
-            glm.vec2.transformMat2(rotatedAW, rotationMatrix(this.bodyA.getPosition()[2]), this.contacts[i].pA);
-            const rotatedBW: glm.vec2 = glm.vec2.create();
-            glm.vec2.transformMat2(rotatedBW, rotationMatrix(this.bodyB.getPosition()[2]), this.contacts[i].pB);
+            const rotatedAW: glm.vec2 = glm.vec2.transformMat2(glm.vec2.create(), this.contacts[i].pA, rotationMatrix(this.bodyA.getPosition()[2]));
+            const rotatedBW: glm.vec2 = glm.vec2.transformMat2(glm.vec2.create(), this.contacts[i].pB, rotationMatrix(this.bodyB.getPosition()[2]));
 
             // Precompute constraints and derivative at C(x-). Truncated Taylor Series.
             // Jacobians are the first derivatives.
             // They are evaluated at start of step configuration x-.
-            this.contacts[i].JacNormA = glm.vec3.fromValues(basis[0], basis[1], cross2(rotatedAW, n));
-            this.contacts[i].JacNormB = glm.vec3.fromValues(-basis[0], -basis[1], -cross2(rotatedBW, n));
-            this.contacts[i].JacTangA = glm.vec3.fromValues(basis[2], basis[3], cross2(rotatedAW, t));
-            this.contacts[i].JacTangB = glm.vec3.fromValues(-basis[2], -basis[3], -cross2(rotatedBW, t));
+            this.contacts[i].JacNormA = glm.vec3.fromValues(basis[0], basis[2], cross2(rotatedAW, n));
+            this.contacts[i].JacNormB = glm.vec3.fromValues(-basis[0], -basis[2], -cross2(rotatedBW, n));
+            this.contacts[i].JacTangA = glm.vec3.fromValues(basis[1], basis[3], cross2(rotatedAW, t));
+            this.contacts[i].JacTangB = glm.vec3.fromValues(-basis[1], -basis[3], -cross2(rotatedBW, t));
 
             // Precompute constraint values at C0: computes the contact gap
             // in the basis [n, t] at the start of the step x-.
@@ -358,27 +398,8 @@ class Manifold extends Force
     //================================//
     public static collide(boxA: RigidBox, boxB: RigidBox, contacts: ContactPoint[]): number
     {
-        if (contacts.length < 2)
-        {
-            contacts = [];
-            for (let i = 0; i < 2; ++i)
-            {
-                contacts.push({
-                    details: createDefaultContactDetails(),
-                    pA: glm.vec2.create(),
-                    pB: glm.vec2.create(),
-                    n: glm.vec2.create(),
-
-                    JacNormA: glm.vec3.create(),
-                    JacNormB: glm.vec3.create(),
-                    JacTangA: glm.vec3.create(),
-                    JacTangB: glm.vec3.create(),
-
-                    C0: glm.vec2.create(),
-                    stick: false
-                });
-            }
-        }
+        contacts.length = 0; // Mutate the array
+        contacts.push(makeEmptyContact(), makeEmptyContact());
 
         let n = glm.vec2.create();
 
@@ -539,31 +560,34 @@ class Manifold extends Force
 
             if (sep <= 0) // We have a contact
             {
-                contacts[numContacts].n = glm.vec2.scale(glm.vec2.create(), n, -1);
-                contacts[numContacts].pA = glm.vec2.transformMat2(glm.vec2.create(), 
+                const dst = contacts[numContacts];
+
+                dst.n = glm.vec2.scale(glm.vec2.create(), n, -1);
+                dst.pA = glm.vec2.transformMat2(glm.vec2.create(), 
                                                     glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.add(glm.vec2.create(), posA, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))),
                                                     rotaT);
-                contacts[numContacts].pB = glm.vec2.transformMat2(glm.vec2.create(), 
+                dst.pB = glm.vec2.transformMat2(glm.vec2.create(), 
                                                     glm.vec2.sub(glm.vec2.create(), cp2[i].v, posB),
                                                     rotbT);
-                contacts[numContacts].details = cp2[i].cd; // Contains clipped points
 
-                if (bestAxis === Axis.FACE_B_X || bestAxis === Axis.FACE_B_Y)
-                {
-                    Flip(contacts[numContacts].details);
-                    contacts[numContacts].pA = glm.vec2.transformMat2(glm.vec2.create(),
-                                                        glm.vec2.sub(glm.vec2.create(), cp2[i].v, posA),
-                                                        rotaT);
-                    contacts[numContacts].pB = glm.vec2.transformMat2(glm.vec2.create(),
-                                                        glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.add(glm.vec2.create(), posB, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))),
-                                                        rotbT);
+                let det = cloneDetails(cp2[i].cd);
+                if (bestAxis === Axis.FACE_B_X || bestAxis === Axis.FACE_B_Y) {
+                    Flip(det);
                 }
+                det.ID = packFeatureID(det);
+                dst.details = det;
+
                 ++numContacts;
+                if (numContacts === 2) break;
             }
         }
 
+        contacts.length = numContacts;
         return numContacts;
     }
+
+    //================================//
+    public getRows(): number { return this.contacts.length * 2; }
 }
 
 export default Manifold;

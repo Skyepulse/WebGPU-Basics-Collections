@@ -58,6 +58,36 @@ class Force
             this.lambda[i] = 0;
         }
     }
+
+    //============= VIRTUAL ===================//
+    public initialize(): boolean
+    {
+        console.warn("This method should not be called directly.");
+        return true;
+    }
+
+    //================================//
+    public computeConstraints(alpha: number): void
+    {
+        console.warn("This method should not be called directly.");
+        alpha = alpha;
+        return;
+    }
+
+    //================================//
+    public computeDerivatives(body: RigidBox): void
+    {
+        console.warn("This method should not be called directly.");
+        body = body;
+        return;
+    }
+
+    //================================//
+    public getRows(): number
+    {
+        console.warn("This method should not be called directly.");
+        return 0;
+    }
 }
 
 export default Force;

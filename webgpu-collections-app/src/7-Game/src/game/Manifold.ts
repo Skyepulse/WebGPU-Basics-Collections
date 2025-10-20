@@ -74,6 +74,11 @@ interface ContactPoint
 }
 
 //================================//
+export interface ContactRender {
+    pos: glm.vec2;
+}
+
+//================================//
 interface ClipVertex
 {
     cd: ContactDetails,
@@ -193,6 +198,7 @@ const ComputeIncidentEdge = (c: ClipVertex[], h: glm.vec2, pos: glm.vec2, rot: g
 {
     const rotT = glm.mat2.transpose(glm.mat2.create(), rot);
     const n: glm.vec2 = glm.vec2.transformMat2(glm.vec2.create(), normal, rotT); // Normal in local space of box B
+    glm.vec2.scale(n, n, -1);
     const absN: glm.vec2 = glm.vec2.fromValues(Math.abs(n[0]), Math.abs(n[1])); // Absolute normal
 
     const biggerX: boolean = absN[0] > absN[1]; // Which axis is most aligned with the normal
@@ -252,6 +258,7 @@ const ComputeIncidentEdge = (c: ClipVertex[], h: glm.vec2, pos: glm.vec2, rot: g
 class Manifold extends Force
 {
     private contacts: ContactPoint[] = []; // Maximium of two contact points
+    private numContacts: number = 0;
     private oldContacts: ContactPoint[] = [];
     private friction: number = 0; // Friction coefficient
 
@@ -283,7 +290,9 @@ class Manifold extends Force
         // Compute new contacts
         this.contacts.length = 0;
         const numContacts: number = Manifold.collide(this.bodyA, this.bodyB, this.contacts);
-        
+        this.numContacts = numContacts;
+
+        console.log('Num Contacts between bodyA (id: ', this.bodyA.id, ') and bodyB (id: ', this.bodyB.id, ') ', numContacts);
         // Merge contacts based on old contact info
         for (let i = 0; i < this.contacts.length; ++i) {
             // default warmstart state
@@ -399,9 +408,12 @@ class Manifold extends Force
     public static collide(boxA: RigidBox, boxB: RigidBox, contacts: ContactPoint[]): number
     {
         contacts.length = 0; // Mutate the array
-        contacts.push(makeEmptyContact(), makeEmptyContact());
-
         let n = glm.vec2.create();
+
+        const RA = rotationMatrix(boxA.getPosition()[2]); // R(A): world-from-local
+        const RB = rotationMatrix(boxB.getPosition()[2]); // R(B): world-from-local
+        const RtA = glm.mat2.transpose(glm.mat2.create(), RA); // world→local
+        const RtB = glm.mat2.transpose(glm.mat2.create(), RB); // world→local
 
         // Half Extents
         const hA = glm.vec2.scale(glm.vec2.create(), boxA.getScale(), 0.5);
@@ -413,20 +425,17 @@ class Manifold extends Force
         const rotA = boxA.getRotationMatrix();
         const rotB = boxB.getRotationMatrix();
 
-        const rotaT = glm.mat2.transpose(glm.mat2.create(), rotA);
-        const rotbT = glm.mat2.transpose(glm.mat2.create(), rotB);
-
         const diff = glm.vec2.sub(glm.vec2.create(), posB, posA);
 
         // center to center vector in each's local frame
-        const dA = glm.vec2.transformMat2(glm.vec2.create(), diff, rotaT); // Diff in A's frame
-        const dB = glm.vec2.transformMat2(glm.vec2.create(), diff, rotbT); // Diff in B's frame
+        const dA = glm.vec2.transformMat2(glm.vec2.create(), diff, RtA);
+        const dB = glm.vec2.transformMat2(glm.vec2.create(), diff, RtB);
         
         // Cheap SAT bounds
         const absDA = glm.vec2.fromValues(Math.abs(dA[0]), Math.abs(dA[1]));
         const absDB = glm.vec2.fromValues(Math.abs(dB[0]), Math.abs(dB[1]));
 
-        const C: glm.mat2 = glm.mat2.multiply(glm.mat2.create(), rotaT, rotB); // This C is relative rotation matrix from A to B
+        const C: glm.mat2 = glm.mat2.multiply(glm.mat2.create(), RtA, rotB); // This C is relative rotation matrix from A to B
         const absC: glm.mat2 = glm.mat2.fromValues( Math.abs(C[0]), Math.abs(C[1]),
                                                     Math.abs(C[2]), Math.abs(C[3]) );
         const absCT: glm.mat2 = glm.mat2.transpose(glm.mat2.create(), absC);
@@ -553,29 +562,79 @@ class Manifold extends Force
         if (np < 2) // Meaning the two points were in front of plane, no collision
             return 0;
 
+        contacts.push(makeEmptyContact(), makeEmptyContact());
+
         let numContacts: number = 0;
         for(let i = 0; i < 2; ++i)
         {
             const sep: number = glm.vec2.dot(frontNormal, cp2[i].v) - front;
 
-            if (sep <= 0) // We have a contact
+            if (sep <= 0) 
             {
                 const dst = contacts[numContacts];
 
+                // C++: contacts[numContacts].normal = -normal;
+                // (their 'normal' is the separating normal chosen earlier)
                 dst.n = glm.vec2.scale(glm.vec2.create(), n, -1);
-                dst.pA = glm.vec2.transformMat2(glm.vec2.create(), 
-                                                    glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.add(glm.vec2.create(), posA, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))),
-                                                    rotaT);
-                dst.pB = glm.vec2.transformMat2(glm.vec2.create(), 
-                                                    glm.vec2.sub(glm.vec2.create(), cp2[i].v, posB),
-                                                    rotbT);
 
-                let det = cloneDetails(cp2[i].cd);
-                if (bestAxis === Axis.FACE_B_X || bestAxis === Axis.FACE_B_Y) {
+                const isBFace = (bestAxis === Axis.FACE_B_X || bestAxis === Axis.FACE_B_Y);
+
+                if (!isBFace) 
+                {
+                    const vMinusProjA = glm.vec2.sub(
+                        glm.vec2.create(),
+                        cp2[i].v,
+                        glm.vec2.add(glm.vec2.create(), posA, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))
+                    );
+                    dst.pA = glm.vec2.transformMat2(glm.vec2.create(), vMinusProjA, RtA);
+                    dst.pB = glm.vec2.transformMat2(glm.vec2.create(), glm.vec2.sub(glm.vec2.create(), cp2[i].v, posB), RtB);
+
+                    let det = cloneDetails(cp2[i].cd);
+                    det.ID = packFeatureID(det);
+                    dst.details = det;
+                } 
+                else 
+                {
+                    let det = cloneDetails(cp2[i].cd);
                     Flip(det);
+
+                    const vMinusPosA = glm.vec2.sub(glm.vec2.create(), cp2[i].v, posA);
+                    dst.pA = glm.vec2.transformMat2(glm.vec2.create(), vMinusPosA, RtA);
+
+                    const vMinusProjB = glm.vec2.sub(
+                        glm.vec2.create(),
+                        cp2[i].v,
+                        glm.vec2.add(glm.vec2.create(), posB, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))
+                    );
+                    dst.pB = glm.vec2.transformMat2(glm.vec2.create(), vMinusProjB, RtB);
+
+                    det.ID = packFeatureID(det);
+                    dst.details = det;
                 }
-                det.ID = packFeatureID(det);
-                dst.details = det;
+
+                // DEBUG: contact world mismatch check
+                {
+                    const worldA = glm.vec2.add(glm.vec2.create(), posA,
+                                    glm.vec2.transformMat2(glm.vec2.create(), dst.pA, RA));
+                    const worldB = glm.vec2.add(glm.vec2.create(), posB,
+                                    glm.vec2.transformMat2(glm.vec2.create(), dst.pB, RB));
+
+                    const expectedA = (!isBFace)
+                    ? glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))
+                    : cp2[i].v;
+                    const expectedB = (!isBFace)
+                    ? cp2[i].v
+                    : glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.scale(glm.vec2.create(), frontNormal, sep));
+
+                    if (glm.vec2.squaredDistance(worldA, expectedA) > 1e-6 ||
+                        glm.vec2.squaredDistance(worldB, expectedB) > 1e-6) {
+                    console.warn('Contact world mismatch', {
+                        isBFace, i, sep,
+                        worldA: Array.from(worldA), expectedA: Array.from(expectedA),
+                        worldB: Array.from(worldB), expectedB: Array.from(expectedB)
+                    });
+                    }
+                }
 
                 ++numContacts;
                 if (numContacts === 2) break;
@@ -584,6 +643,38 @@ class Manifold extends Force
 
         contacts.length = numContacts;
         return numContacts;
+    }
+
+    //================================//
+    public getContactRenders(): ContactRender[] 
+    {
+        const renders: ContactRender[] = [];
+
+        const RA = rotationMatrix(this.bodyA.getPosition()[2]);
+        const RB = rotationMatrix(this.bodyB.getPosition()[2]);
+        const PA = this.bodyA.getPos2();
+        const PB = this.bodyB.getPos2();
+
+        for (let i = 0; i < this.numContacts; ++i)
+        {
+            // world position on A: xA + R(A) * pA
+            const worldPosA = glm.vec2.add(
+                glm.vec2.create(),
+                PA,
+                glm.vec2.transformMat2(glm.vec2.create(), this.contacts[i].pA, RA)
+            );
+            renders.push({ pos: worldPosA });
+
+            // world position on B: xB + R(B) * pB
+            const worldPosB = glm.vec2.add(
+                glm.vec2.create(),
+                PB,
+                glm.vec2.transformMat2(glm.vec2.create(), this.contacts[i].pB, RB)
+            );
+            renders.push({ pos: worldPosB });
+        }
+
+        return renders;
     }
 
     //================================//

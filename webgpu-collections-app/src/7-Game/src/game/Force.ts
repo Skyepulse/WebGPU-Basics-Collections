@@ -7,7 +7,7 @@
 
 import * as glm from 'gl-matrix';
 import type RigidBox from "./RigidBox";
-
+import type { ContactRender } from './Manifold';
 class Force
 {
     public bodyA: RigidBox;
@@ -87,6 +87,13 @@ class Force
     {
         console.warn("This method should not be called directly.");
         return 0;
+    }
+
+    //================================//
+    public getContactRenders(): ContactRender[]
+    {
+        console.warn("This method should not be called directly.");
+        return [];
     }
 }
 

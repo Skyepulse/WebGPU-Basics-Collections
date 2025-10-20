@@ -8,14 +8,17 @@
 //================================//
 import cubeVertWGSL from '../shader/cubeShader_vert.wgsl?raw';
 import cubeFragWGSL from '../shader/cubeShader_frag.wgsl?raw';
+import contactVertWGSL from '../shader/contact_vert.wgsl?raw';
+import contactFragWGSL from '../shader/contact_frag.wgsl?raw';
 
 //================================//
 import type GameManager from "./GameManager";
+import type { ContactRender } from "./Manifold";
 import RigidBox from "./RigidBox";
 import { RequestWebGPUDevice } from "@src/helpers/WebGPUutils";
 import type { ShaderModule, TimestampQuerySet } from "@src/helpers/WebGPUutils";
 import { CreateShaderModule, CreateTimestampQuerySet, ResolveTimestampQuery } from '@src/helpers/WebGPUutils';
-import { createQuadVertices } from '@src/helpers/GeometryUtils';
+import { createQuadVertices, createCircleVerticesTopology } from '@src/helpers/GeometryUtils';
 import * as glm from 'gl-matrix';
 
 const positionSize = 3 * 4; // 2 floats for posx posy and rotation, 4 bytes each
@@ -42,11 +45,23 @@ class GameRenderer
     private CubesShaderModule: ShaderModule | null = null;
     private CubesPipeline: GPURenderPipeline | null = null;
 
+    // Rendering pipeline for contacts
+    private ContactShaderModule: ShaderModule | null = null;
+    private ContactPipeline: GPURenderPipeline | null = null;
+    private cubePipelineLayout: GPUPipelineLayout | null = null;
+
     // Storage buffers
     private vertexBuffer: GPUBuffer | null = null;
     private indexBuffer: GPUBuffer | null = null;
     private staticBuffer: GPUBuffer | null = null;
     private changingBuffer: GPUBuffer | null = null;
+
+    // contact buffers
+    private contactVertexBuffer: GPUBuffer | null = null;
+    private contactIndexBuffer: GPUBuffer | null = null;
+    private contactPositionBuffer: GPUBuffer | null = null;
+
+    // Timestamp query
     private timestampQuerySet: TimestampQuerySet | null = null;
     private screenUniformBuffer: GPUBuffer | null = null;
     private screenBindGroup: GPUBindGroup | null = null;
@@ -59,6 +74,12 @@ class GameRenderer
     private nextId: number = 1;
     private idToIndexMap: Map<number, number> = new Map();
     private indexToId: number[] = [];
+
+    // Contact points
+    private contactPositions: Float32Array = new Float32Array(0);
+    private numContacts: number = 0;
+    private maxContacts: number = 128;
+    private contactIndicesPerInstance: number = 0;
 
     // Static world size (matches physics world)
     static xWorldSize: number = 100;
@@ -117,6 +138,7 @@ class GameRenderer
 
         this.buildBuffers();
         this.initializePipeline();
+        this.initializeContactPipeline();
     }
 
     //================================//
@@ -202,17 +224,32 @@ class GameRenderer
         const instanceIndex = this.idToIndexMap.get(id);
         if (instanceIndex === undefined) return;
 
-        console.log(position);
-
         this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 0] = position[0];
         this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 1] = position[1];
         this.changingCpuArray[instanceIndex * (positionSize + scaleSize) / 4 + 2] = position[2];
     }
 
     //================================//
+    public updateContacts(contacts: ContactRender[]) {
+        this.numContacts = Math.min(contacts.length, this.maxContacts);
+        if (this.numContacts === 0) return;
+
+        if (this.contactPositions.length < this.numContacts * 2)
+            this.contactPositions = new Float32Array(this.maxContacts * 2);
+
+        for (let i = 0; i < this.numContacts; ++i) {
+            this.contactPositions[i * 2 + 0] = contacts[i].pos[0];
+            this.contactPositions[i * 2 + 1] = contacts[i].pos[1];
+        }
+
+        if (this.device && this.contactPositionBuffer)
+            this.device.queue.writeBuffer(this.contactPositionBuffer, 0, this.contactPositions as BufferSource);
+    }
+
+    //================================//
     public render()
     {
-        if (!this.device || !this.context || !this.presentationFormat || !this.CubesPipeline || !this.changingBuffer) return;
+        if (!this.device || !this.context || !this.presentationFormat) return;
 
         const textureView = this.context.getCurrentTexture().createView();
         const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -232,20 +269,37 @@ class GameRenderer
             }),
         };
 
-        const byteLen = this.numInstances * (positionSize + scaleSize);
-
         const encoder = this.device.createCommandEncoder({ label: 'canvas render encoder' });
-        this.device.queue.writeBuffer(this.changingBuffer, 0, this.changingCpuArray.buffer, 0, byteLen);
-
         const pass = encoder.beginRenderPass(renderPassDescriptor);
-        pass.setPipeline(this.CubesPipeline);
-        pass.setVertexBuffer(0, this.vertexBuffer as GPUBuffer);
-        pass.setVertexBuffer(1, this.staticBuffer as GPUBuffer);
-        pass.setVertexBuffer(2, this.changingBuffer as GPUBuffer);
-        pass.setIndexBuffer(this.indexBuffer as GPUBuffer, 'uint16');
-        pass.setBindGroup(0, this.screenBindGroup as GPUBindGroup); 
-        
-        pass.drawIndexed(indicesPerInstance, this.numInstances, 0, 0, 0);
+
+        if (this.CubesPipeline && this.changingBuffer)
+        {
+            const byteLen = this.numInstances * (positionSize + scaleSize);
+            this.device.queue.writeBuffer(this.changingBuffer, 0, this.changingCpuArray.buffer, 0, byteLen);
+
+            pass.setPipeline(this.CubesPipeline);
+            pass.setVertexBuffer(0, this.vertexBuffer as GPUBuffer);
+            pass.setVertexBuffer(1, this.staticBuffer as GPUBuffer);
+            pass.setVertexBuffer(2, this.changingBuffer as GPUBuffer);
+            pass.setIndexBuffer(this.indexBuffer as GPUBuffer, 'uint16');
+            pass.setBindGroup(0, this.screenBindGroup as GPUBindGroup);
+            pass.drawIndexed(indicesPerInstance, this.numInstances, 0, 0, 0);
+        } else
+            this.gameManager?.logWarn("CubesPipeline or changingBuffer not initialized.");
+
+        if (this.ContactPipeline && this.contactVertexBuffer && this.contactIndexBuffer && this.contactPositionBuffer)
+        {
+            pass.setPipeline(this.ContactPipeline);
+            pass.setVertexBuffer(0, this.contactVertexBuffer);
+            pass.setVertexBuffer(1, this.contactPositionBuffer);
+            pass.setIndexBuffer(this.contactIndexBuffer, "uint16");
+            pass.setBindGroup(0, this.screenBindGroup!);
+            pass.drawIndexed(this.contactIndicesPerInstance, this.numContacts, 0, 0, 0);
+
+            console.log(`Rendering ${this.numContacts} contact points: ${this.contactPositions.join(", ")}`);
+        } else
+            this.gameManager?.logWarn("ContactPipeline or contact buffers not initialized.");
+         
         pass.end();
 
         if (this.timestampQuerySet != null)
@@ -269,6 +323,7 @@ class GameRenderer
         const staticBufferSize = this.maxInstances * (colorSize);
         const changingBufferSize = this.maxInstances * (positionSize + scaleSize);
 
+        // Boxes buffers
         const quadTopology = createQuadVertices();
         const vertexBufferSize = quadTopology.vertexData.byteLength;
         const indexBufferSize = quadTopology.indexData.byteLength;
@@ -287,6 +342,31 @@ class GameRenderer
         });
         this.device.queue.writeBuffer(this.indexBuffer, 0, quadTopology.indexData as BufferSource);
 
+        // Contact buffers
+        const circleTopology = createCircleVerticesTopology({ radius: 1, innerRadius: 0.01 });
+        this.contactIndicesPerInstance = circleTopology.numVertices;
+
+        this.contactVertexBuffer = this.device.createBuffer({
+            label: 'Contact vertex buffer',
+            size: circleTopology.vertexData.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.contactVertexBuffer, 0, circleTopology.vertexData as BufferSource);
+
+        this.contactIndexBuffer = this.device.createBuffer({
+            label: 'Contact index buffer',
+            size: circleTopology.indexData.byteLength,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.contactIndexBuffer, 0, circleTopology.indexData as BufferSource);
+
+        this.contactPositionBuffer = this.device.createBuffer({
+            label: 'Contact position buffer',
+            size: this.maxContacts * 2 * 4, // 2 floats (x, y) per contact
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+
+        // Instance data buffers
         this.staticBuffer = this.device.createBuffer({
             label: 'Quad static instance buffer',
             size: staticBufferSize,
@@ -359,9 +439,21 @@ class GameRenderer
             return;
         }
 
+        const bgl0 = this.device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: "uniform" }
+                }
+            ]
+        });
+        this.cubePipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [bgl0] });
+
+
         this.CubesPipeline = this.device.createRenderPipeline({
             label: 'Cubes Render Pipeline',
-            layout: 'auto',
+            layout: this.cubePipelineLayout,
             vertex: {
                 module: this.CubesShaderModule.vertex,
                 entryPoint: 'vs',
@@ -400,7 +492,6 @@ class GameRenderer
             }
         });
 
-        const bgl0 = this.CubesPipeline.getBindGroupLayout(0);
         if (!this.device || !this.screenUniformBuffer) return;
 
         this.screenBindGroup = this.device.createBindGroup({
@@ -409,6 +500,45 @@ class GameRenderer
             entries: [
                 { binding: 0, resource: { buffer: this.screenUniformBuffer } }
             ]
+        });
+    }
+
+    //================================//
+    private initializeContactPipeline()
+    {
+        if (!this.device || !this.presentationFormat || !this.cubePipelineLayout) return;
+
+        this.ContactShaderModule = CreateShaderModule(this.device, contactVertWGSL, contactFragWGSL, "Contact Shader");
+        if (!this.ContactShaderModule)
+        {
+            this.gameManager?.logWarn("Failed to create contact shader modules.");
+            return;
+        }
+
+        this.ContactPipeline = this.device.createRenderPipeline({
+            label: "Contacts Render Pipeline",
+            layout: this.cubePipelineLayout,
+            vertex: {
+                module: this.ContactShaderModule.vertex,
+                entryPoint: "vs",
+                buffers: [
+                    {
+                        arrayStride: 8, // 2 floats (x,y)
+                        attributes: [{ shaderLocation: 0, offset: 0, format: "float32x2" }],
+                    },
+                    {
+                        arrayStride: 8, // 2 floats per instance position (x,y)
+                        stepMode: "instance",
+                        attributes: [{ shaderLocation: 1, offset: 0, format: "float32x2" }],
+                    },
+                ],
+            },
+            fragment: {
+                module: this.ContactShaderModule.fragment,
+                entryPoint: "fs",
+                targets: [{ format: this.presentationFormat }],
+            },
+            primitive: { topology: "triangle-list" },
         });
     }
 }

@@ -128,6 +128,77 @@ export function createCircleVerticesWithColor(
 }
 
 //================================//
+export function createCircleVerticesTopology(
+{
+    radius = 1,
+    subdivisions = 24,
+    innerRadius = 0,
+    startAngle = 0,
+    endAngle = Math.PI * 2
+} = {}): TopologyInformation
+{
+    const numVertices = (subdivisions + 1) * 2;
+    const vertexData: Float32Array = new Float32Array(numVertices * 2);
+
+    let offset = 0;
+    const addVertex = (vertex: VertexInformation) => {
+        vertexData[offset++] = vertex.x;
+        vertexData[offset++] = vertex.y;
+    };
+
+    // 2 triangles per subdivision
+    //
+    // 0--2
+    // | /|
+    // |/ |
+    // 1--3
+    // 
+    // Up to down per angle
+
+    for (let i = 0; i <= subdivisions; i++) 
+    {
+        const angle = startAngle + (i + 0) * (endAngle - startAngle) / subdivisions;
+
+        const c1 = Math.cos(angle);
+        const s1 = Math.sin(angle);
+
+        addVertex({ x: c1 * radius, y: s1 * radius});
+        addVertex({ x: c1 * innerRadius, y: s1 * innerRadius});
+    }
+
+    const indexData = new Uint16Array(subdivisions * 6);
+    let index = 0;
+
+    // 1st tri  2nd tri  3rd tri  4th tri
+    // 0 1 2    2 1 3    2 3 4    4 3 5
+    //
+    // 0--2        2     2--4        4  .....
+    // | /        /|     | /        /|
+    // |/        / |     |/        / |
+    // 1        1--3     3        3--5  .....
+    for (let i = 0; i < subdivisions; ++i) {
+        const offset = i * 2;
+
+        // Triangle One
+        indexData[index++] = offset;
+        indexData[index++] = offset + 1;
+        indexData[index++] = offset + 2;
+
+        // Triangle Two
+        indexData[index++] = offset + 2;
+        indexData[index++] = offset + 1;
+        indexData[index++] = offset + 3;
+    }
+
+    return {
+        vertexData,
+        indexData,
+        numVertices: indexData.length
+    };
+}
+
+
+//================================//
 export function createCircleVertices(
 {
     radius = 1,

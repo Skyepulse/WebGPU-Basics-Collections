@@ -1,7 +1,7 @@
 import * as glm from 'gl-matrix';
 import type RigidBox from "./RigidBox";
 import Force from "./Force";
-import Manifold from './Manifold';
+import Manifold, { type ContactRender } from './Manifold';
 import { outerMult, solveLDLT } from '@src/helpers/MathUtils';
 
 const PENALTY_MIN = 1;
@@ -22,6 +22,8 @@ class Solver
 
     public bodies: RigidBox[] = [];
     public forces: Force[] = [];
+
+    public contactsToRender: ContactRender[] = [];
 
     //============= PUBLIC ===================//
     public Clear(): void
@@ -47,11 +49,16 @@ class Solver
     }
 
     //================================//
-    public step(): void
+    public step(dt: number): void
     {
+        if (Math.abs(dt - this.dt) > 0.01)
+            console.warn(`Warning: Physics timestep changed from ${this.dt} to ${dt}. This may cause instability.`);
+        
+        this.contactsToRender = [];
         // Detection: NAIVE O(n^2) FOR NOW
         for (let i = 0; i < this.bodies.length; ++i)
         {
+            this.contactsToRender.push({ pos: this.bodies[i].getPos2() }); // For debugging body positions TODO remove
             for (let j = i + 1; j < this.bodies.length; ++j)
             {
                 const bodyA: RigidBox = this.bodies[i];
@@ -60,12 +67,21 @@ class Solver
                 const dp: glm.vec2 = glm.vec2.sub(glm.vec2.create(), bodyA.getPos2(), bodyB.getPos2());
                 const r: number = bodyA.getRadius() + bodyB.getRadius();
 
-                if (glm.vec2.squaredLength(dp) <= r * r && !bodyA.isConstrainedTo(bodyB))
+                if (glm.vec2.squaredLength(dp) <= r * r)
                 {
-                    let newManifold: Manifold = new Manifold(bodyA, bodyB);
-                    this.forces.push(newManifold);
-                    bodyA.forces.push(newManifold);
-                    bodyB.forces.push(newManifold);
+                    if(!bodyA.isConstrainedTo(bodyB))
+                    {
+                        let newManifold: Manifold = new Manifold(bodyA, bodyB);
+                        this.forces.push(newManifold);
+                        bodyA.forces.push(newManifold);
+                        bodyB.forces.push(newManifold);
+                        console.log("New constraint added between bodies " + bodyA.id + " and " + bodyB.id);
+                    }
+                    else
+                    {
+                        console.log("Already constrained");
+                    }
+                    
                 }
             }
         }
@@ -90,6 +106,8 @@ class Solver
 
                 continue;
             }
+
+            this.contactsToRender.push(...force.getContactRenders());
 
             for (let j = 0; j < force.getRows(); ++j)
             {
@@ -245,6 +263,23 @@ class Solver
                 }
             }
         }
+    }
+
+    //================================//
+    public addRigidBox(box: RigidBox): void
+    {
+        if (this.bodies.indexOf(box) === -1)
+            this.bodies.push(box);
+
+        console.log(`RigidBox added to solver with ID ${box.id}. Total bodies: ${this.bodies.length}`);
+    }
+
+    //================================//
+    public removeRigidBox(box: RigidBox): void
+    {
+        const index = this.bodies.indexOf(box);
+        if (index !== -1)
+            this.bodies.splice(index, 1);
     }
 }
 

@@ -9,6 +9,7 @@
 import * as glm from 'gl-matrix';
 import GameRenderer from "./GameRenderer";
 import RigidBox from "./RigidBox";
+import Solver from "./Solver";
 import { rand, randomPosInRectRot, randomColorUint8 } from "@src/helpers/MathUtils";
 
 //================================//
@@ -21,8 +22,7 @@ class GameManager
     private canvas: HTMLCanvasElement | null = null;
 
     private gameRenderer: GameRenderer;
-    private rigidBoxes: RigidBox[] = [];
-    // private forces: Force[] = [];
+    private solver: Solver;
 
     private lastFrameTime: number = 0;
 
@@ -31,6 +31,9 @@ class GameManager
     {
         this.canvas = canvas;
         this.gameRenderer = new GameRenderer(this.canvas as HTMLCanvasElement, this);
+        this.solver = new Solver();
+
+        this.solver.setDefaults();
     }
 
     //================================//
@@ -89,27 +92,68 @@ class GameManager
     //=============== PRIVATE =================/
     private startMainLoop()
     {
-        if (this.running)
-        {
+        if (this.running) {
             this.logWarn("Main loop already running!");
             return;
         }
-
         this.running = true;
-        this.lastFrameTime = performance.now();
 
-        const frame = (now: number) =>
-        {
-            if (!this.running) return;
+        // Example static ground box (unchanged)
+        const staticBoxPosition = glm.vec3.fromValues(GameRenderer.xWorldSize * 0.5, 8, 0);
+        const staticBoxScale = glm.vec2.fromValues(GameRenderer.xWorldSize - 20, 10);
+        this.addRigidBox(staticBoxPosition, staticBoxScale, glm.vec3.fromValues(0,0,0), new Uint8Array([200,200,200,255]), true);
 
-            const dt = now - this.lastFrameTime;
-            this.lastFrameTime = now;
+        const fixedStep = 1 / 60;         // seconds
+        let frameCount = 0;
+        let shouldStep = false;
 
-            this.log("Frame diff:" + dt.toFixed(2) + "ms");
+        // Listen for space bar to advance one frame
+        const keyDownHandler = (event: KeyboardEvent) => {
+            if (event.code === 'Space') {
+                event.preventDefault();
+                shouldStep = true;
+            }
+        };
+        window.addEventListener('keydown', keyDownHandler);
+
+        const stepFrame = () => {
+            // Step physics by one fixed timestep (1/60 second)
+            this.solver.step(fixedStep);
+
+            // Update instance transforms
+            for (let i = 0; i < this.solver.bodies.length; ++i) {
+                const body = this.solver.bodies[i];
+                const pos = body.getPosition();
+                const posArray: Float32Array = new Float32Array([pos[0], pos[1], pos[2]]);
+                this.gameRenderer.updateInstancePosition(body.id, posArray);
+            }
+            this.gameRenderer.updateContacts(this.solver.contactsToRender);
 
             this.gameRenderer.render();
+
+            // Throttled diagnostics
+            if (this.logging && (++frameCount % 60 === 0)) {
+                console.log(
+                `[GameManager] Frame ${frameCount} | bodies=${this.solver.bodies.length} forces=${this.solver.forces.length}`
+                );
+            }
+        };
+
+        const frame = () =>
+        {
+            if (!this.running) {
+                window.removeEventListener('keydown', keyDownHandler);
+                return;
+            }
+
+            // Only step when space is pressed
+            if (shouldStep) {
+                stepFrame();
+                shouldStep = false;
+            }
+
             this.rafID = requestAnimationFrame(frame);
-        }
+        };
 
         this.rafID = requestAnimationFrame(frame);
     }
@@ -119,14 +163,14 @@ class GameManager
         pos: glm.vec3 = randomPosInRectRot(0, 0, GameRenderer.xWorldSize, GameRenderer.yWorldSize), 
         scale: glm.vec2 = glm.vec2.fromValues(rand(2, 10), rand(2, 10)), 
         velocity: glm.vec3 = glm.vec3.fromValues(0, 0, 0),
-        color: Uint8Array = randomColorUint8()
+        color: Uint8Array = randomColorUint8(),
+        isStatic: boolean = false
     ): void
     {
-        const box = new RigidBox(scale, color, 1.0, 1.0, pos, velocity);
-
+        const box = new RigidBox(scale, color, isStatic ? 0.0: 1.0, 1.0, pos, velocity);
         box.id = this.gameRenderer.addInstanceBox(box);
         if (box.id !== -1) {
-            this.rigidBoxes.push(box);
+            this.solver.addRigidBox(box);
         } else {
             this.logWarn("Failed to add box instance to renderer.");
         }

@@ -58,7 +58,6 @@ class Solver
         // Detection: NAIVE O(n^2) FOR NOW
         for (let i = 0; i < this.bodies.length; ++i)
         {
-            this.contactsToRender.push({ pos: this.bodies[i].getPos2() }); // For debugging body positions TODO remove
             for (let j = i + 1; j < this.bodies.length; ++j)
             {
                 const bodyA: RigidBox = this.bodies[i];
@@ -75,13 +74,7 @@ class Solver
                         this.forces.push(newManifold);
                         bodyA.forces.push(newManifold);
                         bodyB.forces.push(newManifold);
-                        console.log("New constraint added between bodies " + bodyA.id + " and " + bodyB.id);
                     }
-                    else
-                    {
-                        console.log("Already constrained");
-                    }
-                    
                 }
             }
         }
@@ -270,8 +263,6 @@ class Solver
     {
         if (this.bodies.indexOf(box) === -1)
             this.bodies.push(box);
-
-        console.log(`RigidBox added to solver with ID ${box.id}. Total bodies: ${this.bodies.length}`);
     }
 
     //================================//

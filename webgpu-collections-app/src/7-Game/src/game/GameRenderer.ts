@@ -85,6 +85,11 @@ class GameRenderer
     static xWorldSize: number = 100;
     static yWorldSize: number = 60;
 
+    // Texture to render with MSAA
+    private msaaTexture: GPUTexture | null = null;
+    private msaaView: GPUTextureView | null = null;
+    private sampleCount: number = 4;
+
     //=============== PUBLIC =================//
     constructor(canvas: HTMLCanvasElement, gameManager: GameManager)
     {
@@ -132,10 +137,13 @@ class GameRenderer
                     this.canvas.width = Math.max(1, Math.min(width, this.device.limits.maxTextureDimension2D));
                     this.canvas.height = Math.max(1, Math.min(height, this.device.limits.maxTextureDimension2D));
                 }
+
+                this.createMSAATexture(); // Recreate MSAA texture on resize
             }
         });
         this.observer.observe(this.canvas);
 
+        this.createMSAATexture();
         this.buildBuffers();
         this.initializePipeline();
         this.initializeContactPipeline();
@@ -255,7 +263,8 @@ class GameRenderer
         const renderPassDescriptor: GPURenderPassDescriptor = {
             label: 'basic canvas renderPass',
             colorAttachments: [{
-                view: textureView,
+                view: this.msaaView as GPUTextureView,
+                resolveTarget: textureView, // ← resolves the 4x MSAA buffer into the canvas
                 loadOp: 'clear',
                 storeOp: 'store',
                 clearValue: { r: 0.3, g: 0.3, b: 0.3, a: 1 }
@@ -295,8 +304,6 @@ class GameRenderer
             pass.setIndexBuffer(this.contactIndexBuffer, "uint16");
             pass.setBindGroup(0, this.screenBindGroup!);
             pass.drawIndexed(this.contactIndicesPerInstance, this.numContacts, 0, 0, 0);
-
-            console.log(`Rendering ${this.numContacts} contact points: ${this.contactPositions.join(", ")}`);
         } else
             this.gameManager?.logWarn("ContactPipeline or contact buffers not initialized.");
          
@@ -316,6 +323,21 @@ class GameRenderer
     }
 
     //=============== PRIVATE =================//
+
+    private createMSAATexture() 
+    {
+        if (!this.device || !this.presentationFormat || !this.canvas) return;
+
+        this.msaaTexture = this.device.createTexture({
+            size: [this.canvas.width, this.canvas.height],
+            sampleCount: this.sampleCount,
+            format: this.presentationFormat,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+
+        this.msaaView = this.msaaTexture.createView();
+    }
+    //================================//
     private buildBuffers()
     {
         if (!this.device) return;
@@ -489,7 +511,8 @@ class GameRenderer
                         format: this.presentationFormat
                     }
                 ]
-            }
+            },
+            multisample: { count: 4 },
         });
 
         if (!this.device || !this.screenUniformBuffer) return;
@@ -539,6 +562,7 @@ class GameRenderer
                 targets: [{ format: this.presentationFormat }],
             },
             primitive: { topology: "triangle-list" },
+            multisample: { count: 4 },
         });
     }
 }

@@ -80,8 +80,8 @@ class RigidBox
         const c = Math.cos(this.position[2]);
         const s = Math.sin(this.position[2]);
 
-        const mat = glm.mat2.fromValues( c, -s,
-                                         s,  c) ;
+        const mat = glm.mat2.fromValues( c, s,
+                                         -s,  c) ;
         return mat;
     }
 

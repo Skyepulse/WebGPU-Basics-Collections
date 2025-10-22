@@ -90,67 +90,45 @@ class GameManager
     }
 
     //=============== PRIVATE =================/
-    private startMainLoop()
-    {
+    private startMainLoop() {
         if (this.running) {
             this.logWarn("Main loop already running!");
             return;
         }
         this.running = true;
 
-        // Example static ground box (unchanged)
+        // Static ground box
         const staticBoxPosition = glm.vec3.fromValues(GameRenderer.xWorldSize * 0.5, 8, 0);
         const staticBoxScale = glm.vec2.fromValues(GameRenderer.xWorldSize - 20, 10);
         this.addRigidBox(staticBoxPosition, staticBoxScale, glm.vec3.fromValues(0,0,0), new Uint8Array([200,200,200,255]), true);
 
-        const fixedStep = 1 / 60;         // seconds
-        let frameCount = 0;
-        let shouldStep = false;
+        const fixedStep = 1 / 60; // 60 Hz physics
+        let accumulator = 0;
+        this.lastFrameTime = performance.now();
 
-        // Listen for space bar to advance one frame
-        const keyDownHandler = (event: KeyboardEvent) => {
-            if (event.code === 'Space') {
-                event.preventDefault();
-                shouldStep = true;
+        const frame = (time: number) => {
+            if (!this.running) return;
+
+            const dt = (time - this.lastFrameTime) / 1000;
+            this.lastFrameTime = time;
+            accumulator += dt;
+
+            // Run physics in fixed steps
+            while (accumulator >= fixedStep) {
+                this.solver.step(fixedStep);
+                accumulator -= fixedStep;
             }
-        };
-        window.addEventListener('keydown', keyDownHandler);
 
-        const stepFrame = () => {
-            // Step physics by one fixed timestep (1/60 second)
-            this.solver.step(fixedStep);
-
-            // Update instance transforms
+            // Update transforms
             for (let i = 0; i < this.solver.bodies.length; ++i) {
                 const body = this.solver.bodies[i];
                 const pos = body.getPosition();
-                const posArray: Float32Array = new Float32Array([pos[0], pos[1], pos[2]]);
+                const posArray = new Float32Array([pos[0], pos[1], pos[2]]);
                 this.gameRenderer.updateInstancePosition(body.id, posArray);
             }
+
             this.gameRenderer.updateContacts(this.solver.contactsToRender);
-
             this.gameRenderer.render();
-
-            // Throttled diagnostics
-            if (this.logging && (++frameCount % 60 === 0)) {
-                console.log(
-                `[GameManager] Frame ${frameCount} | bodies=${this.solver.bodies.length} forces=${this.solver.forces.length}`
-                );
-            }
-        };
-
-        const frame = () =>
-        {
-            if (!this.running) {
-                window.removeEventListener('keydown', keyDownHandler);
-                return;
-            }
-
-            // Only step when space is pressed
-            if (shouldStep) {
-                stepFrame();
-                shouldStep = false;
-            }
 
             this.rafID = requestAnimationFrame(frame);
         };

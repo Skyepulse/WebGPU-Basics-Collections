@@ -250,8 +250,8 @@ const ComputeIncidentEdge = (c: ClipVertex[], h: glm.vec2, pos: glm.vec2, rot: g
         }
     }
 
-    glm.vec2.add(c[0].v, glm.vec2.transformMat2(c[0].v, c[0].v, rot), pos);
-    glm.vec2.add(c[1].v, glm.vec2.transformMat2(c[1].v, c[1].v, rot), pos);
+    c[0].v = glm.vec2.add(glm.vec2.create(), pos, glm.vec2.transformMat2(glm.vec2.create(), c[0].v, rot));
+    c[1].v = glm.vec2.add(glm.vec2.create(), pos, glm.vec2.transformMat2(glm.vec2.create(), c[1].v, rot));
 }
 
 //================================//
@@ -292,7 +292,6 @@ class Manifold extends Force
         const numContacts: number = Manifold.collide(this.bodyA, this.bodyB, this.contacts);
         this.numContacts = numContacts;
 
-        console.log('Num Contacts between bodyA (id: ', this.bodyA.id, ') and bodyB (id: ', this.bodyB.id, ') ', numContacts);
         // Merge contacts based on old contact info
         for (let i = 0; i < this.contacts.length; ++i) {
             // default warmstart state
@@ -323,8 +322,8 @@ class Manifold extends Force
             // Friction contact based on normal and tangential
             const n: glm.vec2 = this.contacts[i].n;
             const t: glm.vec2 = glm.vec2.fromValues( n[1], -n[0] );
-            const basis: glm.mat2 = glm.mat2.fromValues(    n[0], t[0], 
-                                                            n[1], t[1]  );
+            const basis: glm.mat2 = glm.mat2.fromValues(    n[0], n[1], 
+                                                            t[0], t[1]  );
 
             const rotatedAW: glm.vec2 = glm.vec2.transformMat2(glm.vec2.create(), this.contacts[i].pA, rotationMatrix(this.bodyA.getPosition()[2]));
             const rotatedBW: glm.vec2 = glm.vec2.transformMat2(glm.vec2.create(), this.contacts[i].pB, rotationMatrix(this.bodyB.getPosition()[2]));
@@ -453,8 +452,8 @@ class Manifold extends Force
         // BOX A default case
         bestAxis = Axis.FACE_A_X;
         separation = faceA[0];
-        if (dA[0] > 0) n = glm.vec2.fromValues(rotA[0], rotA[2]); // Positive x axis, rotA column 0
-        else n = glm.vec2.fromValues(-rotA[0], -rotA[2]); // Negative x axis
+        if (dA[0] > 0) n = glm.vec2.fromValues(rotA[0], rotA[1]); // Positive x axis, rotA column 0
+        else n = glm.vec2.fromValues(-rotA[0], -rotA[1]); // Negative x axis
 
         const relativeTol: number = 0.95;
         const absoluteTol: number = 0.01;
@@ -463,24 +462,24 @@ class Manifold extends Force
         {
             bestAxis = Axis.FACE_A_Y;
             separation = faceA[1];
-            if (dA[1] > 0) n = glm.vec2.fromValues(rotA[1], rotA[3]); // Positive y axis, rotA column 1
-            else n = glm.vec2.fromValues(-rotA[1], -rotA[3]);
+            if (dA[1] > 0) n = glm.vec2.fromValues(rotA[2], rotA[3]); // Positive y axis, rotA column 1
+            else n = glm.vec2.fromValues(-rotA[2], -rotA[3]);
         }
 
         if (faceB[0] > relativeTol * separation + absoluteTol * hB[0])
         {
             bestAxis = Axis.FACE_B_X;
             separation = faceB[0];
-            if (dB[0] > 0) n = glm.vec2.fromValues(rotB[0], rotB[2]); // Positive x axis, rotB column 0
-            else n = glm.vec2.fromValues(-rotB[0], -rotB[2]);
+            if (dB[0] > 0) n = glm.vec2.fromValues(rotB[0], rotB[1]); // Positive x axis, rotB column 0
+            else n = glm.vec2.fromValues(-rotB[0], -rotB[1]);
         }
 
         if (faceB[1] > relativeTol * separation + absoluteTol * hB[1])
         {
             bestAxis = Axis.FACE_B_Y;
             separation = faceB[1];
-            if (dB[1] > 0) n = glm.vec2.fromValues(rotB[1], rotB[3]); // Positive y axis, rotB column 1
-            else n = glm.vec2.fromValues(-rotB[1], -rotB[3]);
+            if (dB[1] > 0) n = glm.vec2.fromValues(rotB[2], rotB[3]); // Positive y axis, rotB column 1
+            else n = glm.vec2.fromValues(-rotB[2], -rotB[3]);
         }
 
         // Now that we have the separating axis,
@@ -501,7 +500,7 @@ class Manifold extends Force
             case Axis.FACE_A_X: // First default case
                 frontNormal = n;
                 front = glm.vec2.dot(posA, frontNormal) + hA[0];
-                sideNormal = glm.vec2.fromValues(rotA[1], rotA[3]); // RotA column 1
+                sideNormal = glm.vec2.fromValues(rotA[2], rotA[3]); // RotA column 1
                 side = glm.vec2.dot(posA, sideNormal);
                 negSide = -side + hA[1];
                 posSide =  side + hA[1];
@@ -512,7 +511,7 @@ class Manifold extends Force
             case Axis.FACE_A_Y:
                 frontNormal = n;
                 front = glm.vec2.dot(posA, frontNormal) + hA[1];
-                sideNormal = glm.vec2.fromValues(rotA[0], rotA[2]);
+                sideNormal = glm.vec2.fromValues(rotA[0], rotA[1]);
                 side = glm.vec2.dot(posA, sideNormal);
                 negSide = -side + hA[0];
                 posSide =  side + hA[0];
@@ -523,7 +522,7 @@ class Manifold extends Force
             case Axis.FACE_B_X:
                 frontNormal = glm.vec2.scale(glm.vec2.create(), n, -1);
                 front = glm.vec2.dot(posB, frontNormal) + hB[0];
-                sideNormal = glm.vec2.fromValues(rotB[1], rotB[3]);
+                sideNormal = glm.vec2.fromValues(rotB[2], rotB[3]);
                 side = glm.vec2.dot(posB, sideNormal);
                 negSide = -side + hB[1];
                 posSide =  side + hB[1];
@@ -534,7 +533,7 @@ class Manifold extends Force
             case Axis.FACE_B_Y:
                 frontNormal = glm.vec2.scale(glm.vec2.create(), n, -1);
                 front = glm.vec2.dot(posB, frontNormal) + hB[1];
-                sideNormal = glm.vec2.fromValues(rotB[0], rotB[2]);
+                sideNormal = glm.vec2.fromValues(rotB[0], rotB[1]);
                 side = glm.vec2.dot(posB, sideNormal);
                 negSide = -side + hB[0];
                 posSide =  side + hB[0];
@@ -572,70 +571,36 @@ class Manifold extends Force
             if (sep <= 0) 
             {
                 const dst = contacts[numContacts];
-
-                // C++: contacts[numContacts].normal = -normal;
-                // (their 'normal' is the separating normal chosen earlier)
                 dst.n = glm.vec2.scale(glm.vec2.create(), n, -1);
 
                 const isBFace = (bestAxis === Axis.FACE_B_X || bestAxis === Axis.FACE_B_Y);
 
+                // Compute: clipPoint - frontNormal * sep
+                const slidPoint = glm.vec2.sub(
+                    glm.vec2.create(), 
+                    cp2[i].v, 
+                    glm.vec2.scale(glm.vec2.create(), frontNormal, sep)
+                );
+
                 if (!isBFace) 
                 {
-                    const vMinusProjA = glm.vec2.sub(
-                        glm.vec2.create(),
-                        cp2[i].v,
-                        glm.vec2.add(glm.vec2.create(), posA, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))
-                    );
-                    dst.pA = glm.vec2.transformMat2(glm.vec2.create(), vMinusProjA, RtA);
+                    // A-face reference
+                    dst.pA = glm.vec2.transformMat2(glm.vec2.create(), glm.vec2.sub(glm.vec2.create(), slidPoint, posA), RtA);
                     dst.pB = glm.vec2.transformMat2(glm.vec2.create(), glm.vec2.sub(glm.vec2.create(), cp2[i].v, posB), RtB);
-
-                    let det = cloneDetails(cp2[i].cd);
-                    det.ID = packFeatureID(det);
-                    dst.details = det;
+                    dst.details = cloneDetails(cp2[i].cd);
                 } 
                 else 
                 {
+                    // B-face reference
+                    dst.pA = glm.vec2.transformMat2(glm.vec2.create(), glm.vec2.sub(glm.vec2.create(), cp2[i].v, posA), RtA);
+                    dst.pB = glm.vec2.transformMat2(glm.vec2.create(), glm.vec2.sub(glm.vec2.create(), slidPoint, posB), RtB);
+                    
                     let det = cloneDetails(cp2[i].cd);
                     Flip(det);
-
-                    const vMinusPosA = glm.vec2.sub(glm.vec2.create(), cp2[i].v, posA);
-                    dst.pA = glm.vec2.transformMat2(glm.vec2.create(), vMinusPosA, RtA);
-
-                    const vMinusProjB = glm.vec2.sub(
-                        glm.vec2.create(),
-                        cp2[i].v,
-                        glm.vec2.add(glm.vec2.create(), posB, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))
-                    );
-                    dst.pB = glm.vec2.transformMat2(glm.vec2.create(), vMinusProjB, RtB);
-
-                    det.ID = packFeatureID(det);
                     dst.details = det;
                 }
 
-                // DEBUG: contact world mismatch check
-                {
-                    const worldA = glm.vec2.add(glm.vec2.create(), posA,
-                                    glm.vec2.transformMat2(glm.vec2.create(), dst.pA, RA));
-                    const worldB = glm.vec2.add(glm.vec2.create(), posB,
-                                    glm.vec2.transformMat2(glm.vec2.create(), dst.pB, RB));
-
-                    const expectedA = (!isBFace)
-                    ? glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.scale(glm.vec2.create(), frontNormal, sep))
-                    : cp2[i].v;
-                    const expectedB = (!isBFace)
-                    ? cp2[i].v
-                    : glm.vec2.sub(glm.vec2.create(), cp2[i].v, glm.vec2.scale(glm.vec2.create(), frontNormal, sep));
-
-                    if (glm.vec2.squaredDistance(worldA, expectedA) > 1e-6 ||
-                        glm.vec2.squaredDistance(worldB, expectedB) > 1e-6) {
-                    console.warn('Contact world mismatch', {
-                        isBFace, i, sep,
-                        worldA: Array.from(worldA), expectedA: Array.from(expectedA),
-                        worldB: Array.from(worldB), expectedB: Array.from(expectedB)
-                    });
-                    }
-                }
-
+                dst.details.ID = packFeatureID(dst.details);
                 ++numContacts;
                 if (numContacts === 2) break;
             }

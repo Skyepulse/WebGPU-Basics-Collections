@@ -6,8 +6,8 @@ export function rotationMatrix(angle: number): glm.mat2
   const c = Math.cos(angle);
   const s = Math.sin(angle);
 
-  return glm.mat2.fromValues( c, -s, 
-                              s, c  );
+  return glm.mat2.fromValues( c, s, 
+                              -s, c  );
 }
 
 //================================//

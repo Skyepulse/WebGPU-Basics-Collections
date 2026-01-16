@@ -14,6 +14,17 @@ export interface TimestampQuerySet
     resultBuffer: GPUBuffer;
 }
 
+export interface PipelineResources
+{
+    bindGroupLayout: GPUBindGroupLayout;
+    bindGroup: GPUBindGroup;
+
+    pipelineLayout: GPUPipelineLayout;
+    pipeline: GPURenderPipeline;
+
+    shaderModule: ShaderModule | null;
+}
+
 //============== METHODS ==================//
 
 /*

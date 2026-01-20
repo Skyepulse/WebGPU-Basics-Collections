@@ -357,3 +357,61 @@ function vec3Dot(a: Float32Array, b: Float32Array): number
 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
+
+//================================//
+export function computePixelToRayMatrix(camera: Camera): Float32Array
+{
+    const tanHalfFov = Math.tan(camera.fovY / 2.0);
+    const scaleX = camera.aspect * tanHalfFov;
+    const scaleY = tanHalfFov;
+    
+    // WebGPU uses column-major layout
+    return new Float32Array([
+        // Column 0: right * scaleX
+        camera.right[0] * scaleX,
+        camera.right[1] * scaleX,
+        camera.right[2] * scaleX,
+        0,
+        // Column 1: up * scaleY
+        camera.up[0] * scaleY,
+        camera.up[1] * scaleY,
+        camera.up[2] * scaleY,
+        0,
+        // Column 2: forward (z = 1 in NDC input)
+        camera.forward[0],
+        camera.forward[1],
+        camera.forward[2],
+        0,
+        // Column 3: unused (w = 0 for directions)
+        0,
+        0,
+        0,
+        1,
+    ]);
+}
+
+//================================//
+export function validatePixelToRayMatrix(camera: Camera): boolean
+{
+    const M = computePixelToRayMatrix(camera);
+    
+    // Test: center pixel (ndc = 0, 0) with z=1 should give forward direction
+    // M * vec4(0, 0, 1, 0) = column 2 = forward
+    const centerRay = new Float32Array([M[8], M[9], M[10]]);
+    vec3Normalize(centerRay);
+    
+    const forward = new Float32Array(camera.forward);
+    vec3Normalize(forward);
+    
+    const dot = vec3Dot(centerRay, forward);
+    const isValid = Math.abs(dot - 1.0) < 1e-5;
+    
+    if (!isValid) {
+        console.error("PixelToRayMatrix validation failed: center ray does not match forward direction");
+        console.log("Center ray:", centerRay);
+        console.log("Forward:", forward);
+        console.log("Dot product:", dot);
+    }
+    
+    return isValid;
+}

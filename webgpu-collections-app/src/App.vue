@@ -17,7 +17,10 @@
                 v-for="i in numberOfExamples"
                 :key="i"
                 class="w-full h-20 last:mb-0 border border-gray-300 hover:bg-amber-300 active:bg-amber-500 text-lg font-bold shadow flex-shrink-0 relative"
+                tabindex="-1"
                 @click="() => selectExample(i)"
+                @keydown.space.prevent
+                @keydown.enter.prevent
                 @mouseenter="onButtonHover(i, $event)"
                 @mouseleave="onButtonLeave"
             >
@@ -123,6 +126,6 @@
 
     //================================//
     onMounted(() => {
-        selectExample(1);
+        selectExample(8);
     });
 </script>

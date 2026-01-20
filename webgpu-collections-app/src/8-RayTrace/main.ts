@@ -8,8 +8,8 @@ import normalFragWgsl from './normal_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { getInfoElement } from '@src/helpers/Others';
-import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect } from '@src/helpers/CameraHelpers';
+import { getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix } from '@src/helpers/CameraHelpers';
 import { createCornellBox, type TopologyInformation } from '@src/helpers/GeometryUtils';
 
 //================================//
@@ -23,6 +23,7 @@ export async function startup_8(canvas: HTMLCanvasElement)
 
 //================================//
 const normalUniformDataSize = (16 * 4 * 4) + (4 * 2); // = 224 bytes
+const rayTracerUniformDataSize = (16 * 4) + (16 * 4); // = 128 bytes
 interface normalObjects extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
@@ -39,14 +40,32 @@ interface normalObjects extends PipelineResources
 
 interface rayTracerObjects extends PipelineResources
 {
+    uniformBuffer: GPUBuffer;
 
+    triangleStorageBuffer: GPUBuffer;
+    normalStorageBuffer: GPUBuffer;
+    colorStorageBuffer: GPUBuffer;
+    reflectanceStorageBuffer: GPUBuffer; // 1 float per vertex
+    indexStorageBuffer: GPUBuffer;
 };
 
 interface lightObject
 {
     position: Float32Array;
     color: Float32Array;
+    intensity: number;
 };
+
+enum RayTracingMode
+{
+    NormalShading = 0,
+    Normals = 1,
+    Distance = 2,
+    ReflectanceDebug = 3,
+}
+
+const sliderMinIntensity = 0.0;
+const sliderMaxIntensity = 20.0;
 
 //================================//
 class RayTracer
@@ -76,6 +95,14 @@ class RayTracer
     private rayTracerObjects: rayTracerObjects;
 
     //================================//
+    private useRaytracing: boolean = false;
+    private rayTracingMode: RayTracingMode = RayTracingMode.NormalShading;
+    private useRaytracingCheckBox: HTMLInputElement | null = null;
+    private useRaytracingLabel: HTMLLabelElement | null = null;
+    private rayTracingModeSelect: HTMLSelectElement | null = null;
+    private intensitySlider: HTMLInputElement | null = null;
+
+    //================================//
     constructor () 
     {
         setCameraPosition(this.camera, 278, 273, -800);
@@ -86,9 +113,72 @@ class RayTracer
         this.normalObjects = {} as normalObjects;
         this.rayTracerObjects = {} as rayTracerObjects;
         this.light = {
-            position: new Float32Array([200.0, 200.0, 200.5]),
-            color: new Float32Array([1.0, 1.0, 1.0])
+            position: new Float32Array([276.0, 450.0, 1.0]), // Max depth is 559, Max X is 552.
+            color: new Float32Array([1.0, 1.0, 1.0]),
+            intensity: 4.0,
         };
+    }
+
+    //================================//
+    initializeUtils()
+    {
+        const utilElement = getUtilElement();
+        if (!utilElement) return;
+
+        this.useRaytracingCheckBox = document.createElement('input');
+        this.useRaytracingCheckBox.type = 'checkbox';
+        this.useRaytracingCheckBox.checked = this.useRaytracing;
+        this.useRaytracingCheckBox.id = 'useRaytracingCheckbox';
+        this.useRaytracingCheckBox.tabIndex = -1;
+        this.useRaytracingCheckBox.addEventListener('change', () => {
+            this.useRaytracing = this.useRaytracingCheckBox!.checked;
+        });
+        this.useRaytracingLabel = document.createElement('label');
+        this.useRaytracingLabel.htmlFor = 'useRaytracingCheckbox';
+        this.useRaytracingLabel.textContent = ' Use Raytracing';
+
+        utilElement.appendChild(this.useRaytracingCheckBox);
+        utilElement.appendChild(this.useRaytracingLabel);
+
+        // UNDER THEM a SELECT FOR RAY TRACING MODE
+        this.rayTracingModeSelect = document.createElement('select');
+        this.rayTracingModeSelect.style.color = 'black';
+        this.rayTracingModeSelect.tabIndex = -1;
+        const modes = ['Normal Shading', 'Normals', 'Distance', 'Reflectance Debug'];
+        modes.forEach((mode, index) => {
+            const option = document.createElement('option');
+            option.value = index.toString();
+            option.text = mode;
+            this.rayTracingModeSelect!.appendChild(option);
+        });
+        this.rayTracingModeSelect.value = this.rayTracingMode.toString();
+        this.rayTracingModeSelect.addEventListener('change', () => {
+            this.rayTracingMode = parseInt(this.rayTracingModeSelect!.value) as RayTracingMode;
+        });
+
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(this.rayTracingModeSelect);
+
+        // slider
+        this.intensitySlider = document.createElement('input');
+        this.intensitySlider.type = 'range';
+        this.intensitySlider.min = sliderMinIntensity.toString();
+        this.intensitySlider.max = sliderMaxIntensity.toString();
+        this.intensitySlider.step = '0.5';
+        this.intensitySlider.value = this.light.intensity.toString();
+        this.intensitySlider.tabIndex = -1;
+
+        this.intensitySlider.addEventListener('input', () => {
+            this.light.intensity = parseFloat(this.intensitySlider!.value);
+        });
+
+        const intensityLabel = document.createElement('label');
+        intensityLabel.htmlFor = 'intensitySlider';
+        intensityLabel.textContent = ' Light Intensity';
+
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(this.intensitySlider);
+        utilElement.appendChild(intensityLabel);
     }
 
     //================================//
@@ -137,10 +227,47 @@ class RayTracer
         if (this.device === null || this.presentationFormat === null) return;
 
         // RAY TRACE PIPELINE
+        this.rayTracerObjects.bindGroupLayout = this.device.createBindGroupLayout({
+            label: 'Ray Trace Bind Group Layout',
+            entries: [{
+                    binding: 0,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "uniform" },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "read-only-storage" },
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "read-only-storage" },
+                },
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "read-only-storage" },
+                },
+                {
+                    binding: 4,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "read-only-storage" },
+                },
+                {
+                    binding: 5,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: "read-only-storage" },
+                }]
+        });
+        this.rayTracerObjects.pipelineLayout = this.device.createPipelineLayout({
+            label: 'Ray Trace Pipeline Layout',
+            bindGroupLayouts: [this.rayTracerObjects.bindGroupLayout],
+        });
         if (this.rayTracerObjects.shaderModule !== null) {
             this.rayTracerObjects.pipeline = this.device.createRenderPipeline({
                 label: 'Ray Trace Pipeline',
-                layout: 'auto',
+                layout: this.rayTracerObjects.pipelineLayout,
                 vertex: {
                     module: this.rayTracerObjects.shaderModule.vertex,
                     entryPoint: 'vs',
@@ -314,6 +441,80 @@ class RayTracer
         });
 
         // Ray Tracer Objects Buffers
+        this.rayTracerObjects.triangleStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Triangle Storage Buffer',
+            size: info.vertexData.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.rayTracerObjects.triangleStorageBuffer, 0, info.vertexData as BufferSource);
+
+        this.rayTracerObjects.normalStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Normal Storage Buffer',
+            size: info.normalData!.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.rayTracerObjects.normalStorageBuffer, 0, info.normalData as BufferSource);
+
+        this.rayTracerObjects.colorStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Color Storage Buffer',
+            size: info.colorData!.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.rayTracerObjects.colorStorageBuffer, 0, info.colorData as BufferSource);
+
+        // transform u16 index data to u32 for storage buffer
+        var newIndexData = new Uint32Array(info.indexData.length);
+        for (let i = 0; i < info.indexData.length; i++) 
+            newIndexData[i] = info.indexData[i];
+
+        this.rayTracerObjects.indexStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Index Storage Buffer',
+            size: newIndexData.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.rayTracerObjects.indexStorageBuffer, 0, newIndexData as BufferSource);
+
+        this.rayTracerObjects.reflectanceStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Reflectance Storage Buffer',
+            size: info.reflectanceData!.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.rayTracerObjects.reflectanceStorageBuffer, 0, info.reflectanceData as BufferSource);
+
+        this.rayTracerObjects.uniformBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Uniform Buffer',
+            size: rayTracerUniformDataSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+
+        this.rayTracerObjects.bindGroup = this.device.createBindGroup({
+            label: 'Ray Tracer Bind Group',
+            layout: this.rayTracerObjects.bindGroupLayout,
+            entries: [{
+                    binding: 0,
+                    resource: { buffer: this.rayTracerObjects.uniformBuffer },
+                },
+                {
+                    binding: 1,
+                    resource: { buffer: this.rayTracerObjects.triangleStorageBuffer },
+                },
+                {
+                    binding: 2,
+                    resource: { buffer: this.rayTracerObjects.normalStorageBuffer },
+                },
+                {
+                    binding: 3,
+                    resource: { buffer: this.rayTracerObjects.colorStorageBuffer },
+                },
+                {
+                    binding: 4,
+                    resource: { buffer: this.rayTracerObjects.reflectanceStorageBuffer },
+                },
+                {
+                    binding: 5,
+                    resource: { buffer: this.rayTracerObjects.indexStorageBuffer },
+                }]
+        });
     }
 
     //================================//
@@ -360,7 +561,9 @@ class RayTracer
         const deltaX = e.clientX - this.lastMouseX;
         const deltaY = e.clientY - this.lastMouseY;
 
-        rotateCameraByMouse(this.camera, -deltaX, -deltaY);
+        const sensitivity = 0.05;
+
+        rotateCameraByMouse(this.camera, deltaX * sensitivity, -deltaY * sensitivity);
 
         this.lastMouseX = e.clientX;
         this.lastMouseY = e.clientY;
@@ -394,6 +597,8 @@ class RayTracer
     async startRendering()
     {
         await this.smallCleanup();
+        
+        this.initializeUtils();
         this.mainLoop();
     }
 
@@ -402,14 +607,46 @@ class RayTracer
     {
         if (this.device === null) return;
 
-        const data = new Float32Array(16 * 3 + 4 + 4);
-        let offset = 0;
-        data.set(this.camera.modelMatrix, offset); offset += 16;
-        data.set(this.camera.viewMatrix, offset); offset += 16;
-        data.set(this.camera.projectionMatrix, offset); offset += 16;
-        data.set(this.camera.position, offset); offset += 4;
-        data.set(this.light.color, offset); offset += 4;
-        this.device.queue.writeBuffer(this.normalObjects.uniformBuffer, 0, data as BufferSource);
+        if (this.useRaytracing)
+        {
+            const data = new ArrayBuffer(rayTracerUniformDataSize);
+            const floatView = new Float32Array(data);
+            const uintView = new Uint32Array(data);
+            floatView.set(computePixelToRayMatrix(this.camera), 0);
+            floatView.set(this.camera.position, 16); // vec4
+            floatView.set(this.light.position, 20); // vec4
+            floatView.set(this.light.color, 24); // vec4
+            uintView[28] = this.rayTracingMode;
+            floatView[29] = this.light.intensity;
+            this.device.queue.writeBuffer(this.rayTracerObjects.uniformBuffer, 0, data);
+        }
+        else
+        {
+            const data = new Float32Array(normalUniformDataSize / 4);
+            let offset = 0;
+            data.set(this.camera.modelMatrix, offset); offset += 16;
+            data.set(this.camera.viewMatrix, offset); offset += 16;
+            data.set(this.camera.projectionMatrix, offset); offset += 16;
+            data.set(this.light.position, offset); offset += 4;
+            data.set(this.light.color, offset); offset += 4;
+            this.device.queue.writeBuffer(this.normalObjects.uniformBuffer, 0, data as BufferSource);
+        }
+    }
+
+    //================================//
+    animate()
+    {
+        // rotate light around the center, Y at height 500, center is at (276, 0, 278.5)
+        const time = performance.now() * 0.001;
+        const radiusX = 200.0;
+        const radiusZ = 250.0;
+        const centerX = 276.0;
+        const centerZ = 278.5;
+        const lightY = 450.0;
+
+        this.light.position[0] = centerX + radiusX * Math.cos(time);
+        this.light.position[1] = lightY;
+        this.light.position[2] = centerZ + radiusZ * Math.sin(time);
     }
 
     //================================//
@@ -432,9 +669,16 @@ class RayTracer
             const startTime = performance.now();
 
             this.handleInput();
+            this.animate();
             this.updateUniforms();
 
             const textureView = this.context.getCurrentTexture().createView();
+            const depthStencilAttachment: GPURenderPassDepthStencilAttachment | undefined = !this.useRaytracing ? {
+                view: this.normalObjects.depthTexture.createView(),
+                depthLoadOp: 'clear' as const,
+                depthStoreOp: 'store' as const,
+                depthClearValue: 1.0,
+            } : undefined;
             const renderPassDescriptor: GPURenderPassDescriptor = {
                 label: 'basic canvas renderPass',
                 colorAttachments: [{
@@ -443,12 +687,7 @@ class RayTracer
                     storeOp: 'store',
                     clearValue: { r: 0.3, g: 0.3, b: 0.3, a: 1 }
                 }],
-                depthStencilAttachment: {
-                    view: this.normalObjects.depthTexture.createView(),
-                    depthLoadOp: 'clear',
-                    depthStoreOp: 'store',
-                    depthClearValue: 1.0,
-                },
+                depthStencilAttachment: depthStencilAttachment,
                 ... (this.timestampQuerySet != null && {
                     timestampWrites: {
                         querySet: this.timestampQuerySet.querySet,
@@ -460,15 +699,24 @@ class RayTracer
 
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
             const pass = encoder.beginRenderPass(renderPassDescriptor);
-            pass.setPipeline(this.normalObjects.pipeline);
-            pass.setBindGroup(0, this.normalObjects.bindGroup);
-            pass.setVertexBuffer(0, this.normalObjects.positionBuffer);
-            pass.setVertexBuffer(1, this.normalObjects.normalBuffer);
-            pass.setVertexBuffer(2, this.normalObjects.uvBuffer);
-            pass.setVertexBuffer(3, this.normalObjects.colorBuffer);
-            pass.setIndexBuffer(this.normalObjects.indexBuffer, 'uint16');
-            pass.drawIndexed(this.normalObjects.numIndices);
-            // Draw two triangles to m  ake a fullscreen quad
+
+            if (this.useRaytracing)
+            {
+                pass.setPipeline(this.rayTracerObjects.pipeline);
+                pass.setBindGroup(0, this.rayTracerObjects.bindGroup);
+                pass.draw(6); // Fullscreen quad
+            }
+            else
+            {
+                pass.setPipeline(this.normalObjects.pipeline);
+                pass.setBindGroup(0, this.normalObjects.bindGroup);
+                pass.setVertexBuffer(0, this.normalObjects.positionBuffer);
+                pass.setVertexBuffer(1, this.normalObjects.normalBuffer);
+                pass.setVertexBuffer(2, this.normalObjects.uvBuffer);
+                pass.setVertexBuffer(3, this.normalObjects.colorBuffer);
+                pass.setIndexBuffer(this.normalObjects.indexBuffer, 'uint16');
+                pass.drawIndexed(this.normalObjects.numIndices);
+            }
             pass.end();
 
             if (this.timestampQuerySet != null)
@@ -557,13 +805,37 @@ class RayTracer
     //================================//
     async smallCleanup()
     {
-        if (this.animationFrameId !== null) 
+        // Clean handlers
+        if (this.useRaytracingCheckBox)
         {
+            this.useRaytracingCheckBox.removeEventListener('change', () => {
+                this.useRaytracing = this.useRaytracingCheckBox!.checked;
+            });
+        }
+        if (this.intensitySlider)
+        {
+            this.intensitySlider.removeEventListener('input', () => {
+                this.light.intensity = parseFloat(this.intensitySlider!.value);
+            });
+        }
+        if (this.rayTracingModeSelect)
+        {
+            this.rayTracingModeSelect.removeEventListener('change', () => {
+                this.rayTracingMode = parseInt(this.rayTracingModeSelect!.value) as RayTracingMode;
+            });
+        }
+
+        const utilElement = getUtilElement();
+        for (const child of Array.from(utilElement?.children || []))
+        {
+            child.remove();
+        }
+
+        if (this.animationFrameId !== null) {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
-        if (this.resizeObserver && this.canvas) 
-        {
+        if (this.resizeObserver && this.canvas) {
             this.resizeObserver.unobserve(this.canvas);
             this.resizeObserver = null;
         }

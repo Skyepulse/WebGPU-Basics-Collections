@@ -1,3 +1,5 @@
+import { computeNormal } from "./MathUtils"
+
 //================================//
 interface VertexInformation
 {
@@ -18,6 +20,7 @@ export interface TopologyInformation
 
     normalData?: Float32Array
     colorData?: Float32Array
+    reflectanceData?: Float32Array
     uvData?: Float32Array
 }
 
@@ -255,9 +258,7 @@ export function createCircleVertices(
 
 //================================//
 export function createCornellBox(): TopologyInformation
-{
-    const scale = 1.0;
-    
+{    
     // Colors
     const white: [number, number, number] = [0.73, 0.73, 0.73];
     const red: [number, number, number] = [0.65, 0.05, 0.05];
@@ -268,65 +269,30 @@ export function createCornellBox(): TopologyInformation
     const vertices: number[] = [];
     const normals: number[] = [];
     const colors: number[] = [];
+    const reflectances: number[] = [];
     const uvs: number[] = [];
     const indices: number[] = [];
     
     let vertexCount = 0;
     
     //================================//
-    function vec3Subtract(a: [number, number, number], b: [number, number, number]): [number, number, number] 
-    {
-        return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    }
-    
-    //================================//
-    function vec3Cross(a: [number, number, number], b: [number, number, number]): [number, number, number] 
-    {
-        return [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0]
-        ];
-    }
-    
-    //================================//
-    function vec3Normalize(v: [number, number, number]): [number, number, number] 
-    {
-        const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        if (len > 0.00001) {
-            return [v[0] / len, v[1] / len, v[2] / len];
-        }
-        return [0, 0, 0];
-    }
-    
-    //================================//
-    function computeNormal(
-        v0: [number, number, number],
-        v1: [number, number, number],
-        v2: [number, number, number]
-    ): [number, number, number] 
-    {
-        const edge1 = vec3Subtract(v1, v0);
-        const edge2 = vec3Subtract(v2, v0);
-        return vec3Normalize(vec3Cross(edge1, edge2));
-    }
-    
-    //================================//
     function addVertex(
         position: [number, number, number],
         normal: [number, number, number],
         color: [number, number, number],
-        uv: [number, number]
+        uv: [number, number],
+        reflectance: number = 0.0
     ): number 
     {
         vertices.push(
-            position[0] * scale - 0.5,
-            position[1] * scale,
-            position[2] * scale - 0.5
+            position[0],
+            position[1],
+            position[2]
         );
         normals.push(normal[0], normal[1], normal[2]);
         colors.push(color[0], color[1], color[2]);
         uvs.push(uv[0], uv[1]);
+        reflectances.push(reflectance);
         return vertexCount++;
     }
     
@@ -337,7 +303,8 @@ export function createCornellBox(): TopologyInformation
         v2: [number, number, number],
         v3: [number, number, number],
         color: [number, number, number],
-        flipNormal: boolean = false
+        flipNormal: boolean = false,
+        reflectance: number = 0.0
     ): void 
     {
         let normal = computeNormal(v0, v1, v2);
@@ -345,14 +312,69 @@ export function createCornellBox(): TopologyInformation
             normal = [-normal[0], -normal[1], -normal[2]];
         }
         
-        const i0 = addVertex(v0, normal, color, [0, 0]);
-        const i1 = addVertex(v1, normal, color, [1, 0]);
-        const i2 = addVertex(v2, normal, color, [1, 1]);
-        const i3 = addVertex(v3, normal, color, [0, 1]);
-        
+        const i0 = addVertex(v0, normal, color, [0, 0], reflectance);
+        const i1 = addVertex(v1, normal, color, [1, 0], reflectance);
+        const i2 = addVertex(v2, normal, color, [1, 1], reflectance);
+        const i3 = addVertex(v3, normal, color, [0, 1], reflectance);
+
         indices.push(i0, i1, i2);
         indices.push(i0, i2, i3);
     }
+
+    //================================//
+    // Simple sphere
+    function addSphere(
+        center: [number, number, number],
+        radius: number,
+        color: [number, number, number],
+        latitudeBands: number = 12,
+        longitudeBands: number = 12,
+        reflectance: number = 0.0
+    ): void 
+    {
+        const startIndex = vertexCount;
+
+        for (let latNumber = 0; latNumber <= latitudeBands; latNumber++)
+        {
+            const theta = latNumber * Math.PI / latitudeBands;
+            const sinTheta = Math.sin(theta);
+            const cosTheta = Math.cos(theta);
+
+            for (let longNumber = 0; longNumber <= longitudeBands; longNumber++)
+            {
+                const phi = longNumber * 2 * Math.PI / longitudeBands;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+
+                const x = cosPhi * sinTheta;
+                const y = cosTheta;
+                const z = sinPhi * sinTheta;
+                const u = 1 - (longNumber / longitudeBands);
+                const v = 1 - (latNumber / latitudeBands);
+
+                const vertexPosition: [number, number, number] = [
+                    center[0] + radius * x,
+                    center[1] + radius * y,
+                    center[2] + radius * z
+                ];
+
+                addVertex(vertexPosition, [x, y, z], color, [u, v], reflectance);
+            }
+        }
+
+        for (let latNumber = 0; latNumber < latitudeBands; latNumber++)
+        {
+            for (let longNumber = 0; longNumber < longitudeBands; longNumber++)
+            {
+                const first = startIndex + (latNumber * (longitudeBands + 1)) + longNumber;
+                const second = first + longitudeBands + 1;
+
+                indices.push(first, first + 1, second); // tri 1
+                indices.push(second, first + 1, second + 1); // tri 2
+            }
+        }
+    }
+        
     
     // ============== FLOOR (white) ============== //
     addQuad(
@@ -360,7 +382,9 @@ export function createCornellBox(): TopologyInformation
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 559.2],
         [549.6, 0.0, 559.2],
-        white
+        white,
+        false,
+        0.2
     );
     
     // ============== CEILING (white) ============== //
@@ -369,7 +393,9 @@ export function createCornellBox(): TopologyInformation
         [556.0, 548.8, 559.2],
         [0.0, 548.8, 559.2],
         [0.0, 548.8, 0.0],
-        white
+        white,
+        false,
+        0.2
     );
     
     // ============== LIGHT (slightly below ceiling) ============== //
@@ -390,6 +416,8 @@ export function createCornellBox(): TopologyInformation
         [0.0, 548.8, 559.2],
         [556.0, 548.8, 559.2],
         white,
+        false,
+        0.6
     );
     
     // ============== RIGHT WALL (green) ============== //
@@ -409,7 +437,18 @@ export function createCornellBox(): TopologyInformation
         [556.0, 548.8, 0.0],
         red
     );
+
+    // Add Sphere in middle of room
+    addSphere(
+        [278.0, 224.4, 279.5],
+        120.0,
+        white,
+        16,
+        16,
+        1.0
+    );
     
+    /*
     // ============== SHORT BLOCK (white) ============== //
     // Top
     addQuad(
@@ -472,7 +511,7 @@ export function createCornellBox(): TopologyInformation
         [423.0, 330.0, 247.0],
         [472.0, 330.0, 406.0],
         [472.0, 0.0, 406.0],
-        white
+        white,
     );
     
     // Right face
@@ -481,7 +520,7 @@ export function createCornellBox(): TopologyInformation
         [472.0, 330.0, 406.0],
         [314.0, 330.0, 456.0],
         [314.0, 0.0, 456.0],
-        white
+        white,
     );
     
     // Back face
@@ -490,7 +529,7 @@ export function createCornellBox(): TopologyInformation
         [314.0, 330.0, 456.0],
         [265.0, 330.0, 296.0],
         [265.0, 0.0, 296.0],
-        white
+        white,
     );
     
     // Left face
@@ -499,8 +538,9 @@ export function createCornellBox(): TopologyInformation
         [265.0, 330.0, 296.0],
         [423.0, 330.0, 247.0],
         [423.0, 0.0, 247.0],
-        white
+        white,
     );
+    */
     
     return {
         vertexData: new Float32Array(vertices),
@@ -508,6 +548,7 @@ export function createCornellBox(): TopologyInformation
         numVertices: indices.length,
         normalData: new Float32Array(normals),
         colorData: new Float32Array(colors),
+        reflectanceData: new Float32Array(reflectances),
         uvData: new Float32Array(uvs)
     };
 }

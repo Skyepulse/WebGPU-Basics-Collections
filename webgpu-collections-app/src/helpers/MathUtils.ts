@@ -11,6 +11,23 @@ export function rotationMatrix(angle: number): glm.mat2
 }
 
 //================================//
+export function rotationMatrix3(angleX: number, angleY: number, angleZ: number): glm.mat3
+{
+  const cx = Math.cos(angleX);
+  const sx = Math.sin(angleX);
+  const cy = Math.cos(angleY);
+  const sy = Math.sin(angleY);
+  const cz = Math.cos(angleZ);
+  const sz = Math.sin(angleZ);
+
+  return glm.mat3.fromValues(
+    cy * cz,                     -cy * sz,                    sy,
+    sx * sy * cz + cx * sz,     -sx * sy * sz + cx * cz,   -sx * cy,
+    -cx * sy * cz + sx * sz,     cx * sy * sz + sx * cz,    cx * cy
+  );
+}
+
+//================================//
 export function scaleByValue(m: glm.mat3, v: number): glm.mat3
 {
   const out = glm.mat3.create();

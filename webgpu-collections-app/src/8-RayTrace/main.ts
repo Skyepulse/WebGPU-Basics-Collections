@@ -11,6 +11,7 @@ import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUut
 import { getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix } from '@src/helpers/CameraHelpers';
 import { createCornellBox, type TopologyInformation } from '@src/helpers/GeometryUtils';
+import { rotationMatrix3 } from '@src/helpers/MathUtils';
 
 //================================//
 export async function startup_8(canvas: HTMLCanvasElement)
@@ -54,6 +55,7 @@ interface lightObject
     position: Float32Array;
     color: Float32Array;
     intensity: number;
+    bounces: number;
 };
 
 enum RayTracingMode
@@ -66,6 +68,9 @@ enum RayTracingMode
 
 const sliderMinIntensity = 0.0;
 const sliderMaxIntensity = 20.0;
+
+const sliderMinNumBounces = 0;
+const sliderMaxNumBounces = 10;
 
 //================================//
 class RayTracer
@@ -101,6 +106,10 @@ class RayTracer
     private useRaytracingLabel: HTMLLabelElement | null = null;
     private rayTracingModeSelect: HTMLSelectElement | null = null;
     private intensitySlider: HTMLInputElement | null = null;
+    private numBouncesSlider: HTMLInputElement | null = null;
+
+    //================================//
+    private additionalInfo: any = null;
 
     //================================//
     constructor () 
@@ -114,8 +123,9 @@ class RayTracer
         this.rayTracerObjects = {} as rayTracerObjects;
         this.light = {
             position: new Float32Array([276.0, 450.0, 1.0]), // Max depth is 559, Max X is 552.
-            color: new Float32Array([1.0, 1.0, 1.0]),
+            color: new Float32Array([0.5, 0.5, 1.0]),
             intensity: 4.0,
+            bounces: 1,
         };
     }
 
@@ -179,6 +189,26 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
         utilElement.appendChild(this.intensitySlider);
         utilElement.appendChild(intensityLabel);
+
+        this.numBouncesSlider = document.createElement('input');
+        this.numBouncesSlider.type = 'range';
+        this.numBouncesSlider.min = sliderMinNumBounces.toString();
+        this.numBouncesSlider.max = sliderMaxNumBounces.toString();
+        this.numBouncesSlider.step = '1';
+        this.numBouncesSlider.value = this.light.bounces.toString();
+        this.numBouncesSlider.tabIndex = -1;
+
+        this.numBouncesSlider.addEventListener('input', () => {
+            this.light.bounces = parseInt(this.numBouncesSlider!.value);
+        });
+
+        const bouncesLabel = document.createElement('label');
+        bouncesLabel.htmlFor = 'numBouncesSlider';
+        bouncesLabel.textContent = ' Number of Bounces';
+
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(this.numBouncesSlider);
+        utilElement.appendChild(bouncesLabel);
     }
 
     //================================//
@@ -389,6 +419,8 @@ class RayTracer
 
         // Normal Objects Buffers
         const info: TopologyInformation = createCornellBox();
+        this.additionalInfo = info.additionalInfo;
+
         this.normalObjects.positionBuffer = this.device.createBuffer({
             label: 'Normal Position Buffer',
             size: info.vertexData.byteLength,
@@ -618,6 +650,7 @@ class RayTracer
             floatView.set(this.light.color, 24); // vec4
             uintView[28] = this.rayTracingMode;
             floatView[29] = this.light.intensity;
+            uintView[30] = this.light.bounces; // Number of bounces
             this.device.queue.writeBuffer(this.rayTracerObjects.uniformBuffer, 0, data);
         }
         else
@@ -647,6 +680,74 @@ class RayTracer
         this.light.position[0] = centerX + radiusX * Math.cos(time);
         this.light.position[1] = lightY;
         this.light.position[2] = centerZ + radiusZ * Math.sin(time);
+
+        // rotate cube
+        if (this.additionalInfo && this.additionalInfo.cubeVertexStart !== undefined) 
+        {
+            const cubeCenter = this.additionalInfo.cubeCenter;
+            const angle = time; // rotate around Y axis
+            const rotMatrix3d = rotationMatrix3(0, angle, 0);
+
+            const startCubeVertex = this.additionalInfo.cubeVertexStart as number;
+            const numCubeVertices = this.additionalInfo.cubeVertexCount as number;
+
+            const originalVertices = this.additionalInfo.cubeVertexInfo as Float32Array;
+            const rotatedVertices = new Float32Array(numCubeVertices * 3);
+
+            const originalNormals = this.additionalInfo.cubeNormalsInfo as Float32Array;
+            const rotatedNormals = new Float32Array(numCubeVertices * 3);
+            
+            for (let i = 0; i < numCubeVertices; i++)
+            {   
+                const baseIndex = i * 3;
+                const ox = originalVertices[baseIndex] - cubeCenter[0];
+                const oy = originalVertices[baseIndex + 1] - cubeCenter[1];
+                const oz = originalVertices[baseIndex + 2] - cubeCenter[2];
+                
+                rotatedVertices[baseIndex] = rotMatrix3d[0] * ox + rotMatrix3d[1] * oy + rotMatrix3d[2] * oz + cubeCenter[0];
+                rotatedVertices[baseIndex + 1] = rotMatrix3d[3] * ox + rotMatrix3d[4] * oy + rotMatrix3d[5] * oz + cubeCenter[1];
+                rotatedVertices[baseIndex + 2] = rotMatrix3d[6] * ox + rotMatrix3d[7] * oy + rotMatrix3d[8] * oz + cubeCenter[2];
+
+                // rotate normals
+                const nx = originalNormals[baseIndex];
+                const ny = originalNormals[baseIndex + 1];
+                const nz = originalNormals[baseIndex + 2];
+
+                rotatedNormals[baseIndex] = rotMatrix3d[0] * nx + rotMatrix3d[1] * ny + rotMatrix3d[2] * nz;
+                rotatedNormals[baseIndex + 1] = rotMatrix3d[3] * nx + rotMatrix3d[4] * ny + rotMatrix3d[5] * nz;
+                rotatedNormals[baseIndex + 2] = rotMatrix3d[6] * nx + rotMatrix3d[7] * ny + rotMatrix3d[8] * nz;
+            }
+
+            // write in buffer
+            if (this.useRaytracing)
+            {
+                this.device!.queue.writeBuffer(
+                    this.rayTracerObjects.triangleStorageBuffer, 
+                    startCubeVertex * 3 * 4, 
+                    rotatedVertices as BufferSource
+                );
+
+                this.device!.queue.writeBuffer(
+                    this.rayTracerObjects.normalStorageBuffer, 
+                    startCubeVertex * 3 * 4, 
+                    rotatedNormals as BufferSource
+                );
+            }
+            else
+            {
+                this.device!.queue.writeBuffer(
+                    this.normalObjects.positionBuffer, 
+                    startCubeVertex * 3 * 4, 
+                    rotatedVertices as BufferSource
+                );
+
+                this.device!.queue.writeBuffer(
+                    this.normalObjects.normalBuffer, 
+                    startCubeVertex * 3 * 4, 
+                    rotatedNormals as BufferSource
+                );
+            }
+        }
     }
 
     //================================//

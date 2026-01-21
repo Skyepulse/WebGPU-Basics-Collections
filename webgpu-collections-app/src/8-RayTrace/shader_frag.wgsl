@@ -7,7 +7,7 @@ struct Uniform
     lightColor: vec4f,     // w unused
     mode: u32,
     lightIntensity: f32,
-    _pad1: u32,
+    numBounces: u32,
     _pad2: u32,
 };
 
@@ -93,7 +93,7 @@ fn rayTriangleIntersect(ray: Ray, triIndex: u32, hitCoord: ptr<function, vec3f>)
     let kEpsilon: f32 = 0.000001;
 
     // culling or not, we do or don't compare absolute value of det
-    if (abs(det) < kEpsilon) 
+    if (det < kEpsilon) 
     {
         return false; // No intersection
     }
@@ -326,8 +326,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
 
     if (uniforms.mode == 0u)
     {
-        let maxBounces: u32 = 1u;
-        color = rayTraceWithBounces(ray, maxBounces);
+        color = rayTraceWithBounces(ray, uniforms.numBounces);
     }
     else if (uniforms.mode == 1u)
     {

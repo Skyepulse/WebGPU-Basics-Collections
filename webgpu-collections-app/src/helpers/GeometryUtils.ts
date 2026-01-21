@@ -22,6 +22,8 @@ export interface TopologyInformation
     colorData?: Float32Array
     reflectanceData?: Float32Array
     uvData?: Float32Array
+
+    additionalInfo?: any
 }
 
 //================================//
@@ -322,6 +324,85 @@ export function createCornellBox(): TopologyInformation
     }
 
     //================================//
+    function addCube(
+        center: [number, number, number],
+        size: [number, number, number],
+        color: [number, number, number],
+        rotation: [number, number, number] = [0, 0, 0], // in radians
+        reflectance: number = 0.0
+    ): void
+    {
+        const hx = size[0] / 2;
+        const hy = size[1] / 2;
+        const hz = size[2] / 2;
+
+        
+        let v0: [number, number, number] = [center[0] - hx, center[1] - hy, center[2] - hz];
+        let v1: [number, number, number] = [center[0] + hx, center[1] - hy, center[2] - hz];
+        let v2: [number, number, number] = [center[0] + hx, center[1] + hy, center[2] - hz];
+        let v3: [number, number, number] = [center[0] - hx, center[1] + hy, center[2] - hz];
+        let v4: [number, number, number] = [center[0] - hx, center[1] - hy, center[2] + hz];
+        let v5: [number, number, number] = [center[0] + hx, center[1] - hy, center[2] + hz];
+        let v6: [number, number, number] = [center[0] + hx, center[1] + hy, center[2] + hz];
+        let v7: [number, number, number] = [center[0] - hx, center[1] + hy, center[2] + hz];
+
+        // Apply rotation to the vertices
+        const rotMat: Float32Array = new Float32Array(9);
+        const cx = Math.cos(rotation[0]);
+        const sx = Math.sin(rotation[0]);
+        const cy = Math.cos(rotation[1]);
+        const sy = Math.sin(rotation[1]);
+        const cz = Math.cos(rotation[2]);
+        const sz = Math.sin(rotation[2]);
+
+        rotMat[0] = cy * cz;
+        rotMat[1] = -cy * sz;
+        rotMat[2] = sy;
+        rotMat[3] = sx * sy * cz + cx * sz;
+        rotMat[4] = -sx * sy * sz + cx * cz;
+        rotMat[5] = -sx * cy;
+        rotMat[6] = -cx * sy * cz + sx * sz;
+        rotMat[7] = cx * sy * sz + sx * cz;
+        rotMat[8] = cx * cy;
+
+        const rotateVertex = (v: [number, number, number]): [number, number, number] => 
+        {
+            const x = v[0] - center[0];
+            const y = v[1] - center[1];
+            const z = v[2] - center[2];
+
+            return [
+                rotMat[0] * x + rotMat[1] * y + rotMat[2] * z + center[0],
+                rotMat[3] * x + rotMat[4] * y + rotMat[5] * z + center[1],
+                rotMat[6] * x + rotMat[7] * y + rotMat[8] * z + center[2]
+            ];
+        }
+
+        v0 = rotateVertex(v0);
+        v1 = rotateVertex(v1);
+        v2 = rotateVertex(v2);
+        v3 = rotateVertex(v3);
+        v4 = rotateVertex(v4);
+        v5 = rotateVertex(v5);
+        v6 = rotateVertex(v6);
+        v7 = rotateVertex(v7);
+        
+        // front
+        addQuad(v4, v5, v6, v7, color, false, reflectance);
+        // back
+        addQuad(v1, v0, v3, v2, color, false, reflectance);
+        // left
+        addQuad(v0, v4, v7, v3, color, false, reflectance);
+        // right
+        addQuad(v5, v1, v2, v6, color, false, reflectance);
+        // top
+        addQuad(v3, v7, v6, v2, color, false, reflectance);
+        // bottom
+        addQuad(v0, v1, v5, v4, color, false, reflectance);
+    }
+
+    /*
+    //================================//
     // Simple sphere
     function addSphere(
         center: [number, number, number],
@@ -373,9 +454,9 @@ export function createCornellBox(): TopologyInformation
                 indices.push(second, first + 1, second + 1); // tri 2
             }
         }
-    }
-        
-    
+    }  
+    */
+
     // ============== FLOOR (white) ============== //
     addQuad(
         [552.8, 0.0, 0.0],
@@ -384,7 +465,7 @@ export function createCornellBox(): TopologyInformation
         [549.6, 0.0, 559.2],
         white,
         false,
-        0.2
+        0.8
     );
     
     // ============== CEILING (white) ============== //
@@ -395,7 +476,7 @@ export function createCornellBox(): TopologyInformation
         [0.0, 548.8, 0.0],
         white,
         false,
-        0.2
+        0.8
     );
     
     // ============== LIGHT (slightly below ceiling) ============== //
@@ -416,8 +497,6 @@ export function createCornellBox(): TopologyInformation
         [0.0, 548.8, 559.2],
         [556.0, 548.8, 559.2],
         white,
-        false,
-        0.6
     );
     
     // ============== RIGHT WALL (green) ============== //
@@ -438,15 +517,27 @@ export function createCornellBox(): TopologyInformation
         red
     );
 
+    let startCubeVertex = vertexCount;
+    addCube(
+        [278.0, 224.4, 279.5],
+        [120.0, 120.0, 120.0],
+        white,
+        [4, Math.PI / 9, 7],
+        1.0
+    );
+    let numVerticesCube = vertexCount - startCubeVertex;
+
+    /*
     // Add Sphere in middle of room
     addSphere(
         [278.0, 224.4, 279.5],
         120.0,
         white,
-        16,
-        16,
+        64,
+        64,
         1.0
     );
+    */
     
     /*
     // ============== SHORT BLOCK (white) ============== //
@@ -494,6 +585,7 @@ export function createCornellBox(): TopologyInformation
         [82.0, 0.0, 225.0],
         white
     );
+    
     
     // ============== TALL BLOCK (white) ============== //
     // Top
@@ -549,6 +641,13 @@ export function createCornellBox(): TopologyInformation
         normalData: new Float32Array(normals),
         colorData: new Float32Array(colors),
         reflectanceData: new Float32Array(reflectances),
-        uvData: new Float32Array(uvs)
+        uvData: new Float32Array(uvs),
+        additionalInfo: {
+            cubeVertexStart: startCubeVertex,
+            cubeVertexCount: numVerticesCube,
+            cubeCenter: [278.0, 224.4, 279.5],
+            cubeVertexInfo: new Float32Array(vertices.slice(startCubeVertex * 3, (startCubeVertex + numVerticesCube) * 3)),
+            cubeNormalsInfo: new Float32Array(normals.slice(startCubeVertex * 3, (startCubeVertex + numVerticesCube) * 3))
+        }
     };
 }

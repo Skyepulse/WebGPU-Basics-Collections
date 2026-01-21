@@ -373,6 +373,12 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
             color = vec3f(0.0, 0.0, 0.0);
         }
     }
+    else if (uniforms.mode == 4u)
+    {
+        // visualize ray directions
+        let dir = normalize(ray.direction);
+        color = dir;
+    }
     
     return vec4f(color, 1.0);
 }

@@ -9,7 +9,7 @@ import normalFragWgsl from './normal_frag.wgsl?raw';
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
 import { getInfoElement, getUtilElement } from '@src/helpers/Others';
-import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix } from '@src/helpers/CameraHelpers';
+import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy } from '@src/helpers/CameraHelpers';
 import { createCornellBox, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import { rotationMatrix3 } from '@src/helpers/MathUtils';
 
@@ -64,13 +64,14 @@ enum RayTracingMode
     Normals = 1,
     Distance = 2,
     ReflectanceDebug = 3,
+    rayDirections = 4,
 }
 
 const sliderMinIntensity = 0.0;
 const sliderMaxIntensity = 20.0;
 
 const sliderMinNumBounces = 0;
-const sliderMaxNumBounces = 10;
+const sliderMaxNumBounces = 1000;
 
 //================================//
 class RayTracer
@@ -100,7 +101,7 @@ class RayTracer
     private rayTracerObjects: rayTracerObjects;
 
     //================================//
-    private useRaytracing: boolean = false;
+    private useRaytracing: boolean = true;
     private rayTracingMode: RayTracingMode = RayTracingMode.NormalShading;
     private useRaytracingCheckBox: HTMLInputElement | null = null;
     private useRaytracingLabel: HTMLLabelElement | null = null;
@@ -114,7 +115,8 @@ class RayTracer
     //================================//
     constructor () 
     {
-        setCameraPosition(this.camera, 278, 273, -800);
+        setCameraPosition(this.camera, 278, 500, -700);
+        rotateCameraBy(this.camera, 0, -0.3);
         setCameraNearFar(this.camera, 0.1, 2000); // Increase far plane to see entire Cornell box
         this.camera.moveSpeed = 20.0;
         this.camera.rotateSpeed = 0.05;
@@ -123,9 +125,9 @@ class RayTracer
         this.rayTracerObjects = {} as rayTracerObjects;
         this.light = {
             position: new Float32Array([276.0, 450.0, 1.0]), // Max depth is 559, Max X is 552.
-            color: new Float32Array([0.5, 0.5, 1.0]),
-            intensity: 4.0,
-            bounces: 1,
+            color: new Float32Array([0.9, 0.9, 1.0]),
+            intensity: 5.0,
+            bounces: 10,
         };
     }
 
@@ -154,7 +156,7 @@ class RayTracer
         this.rayTracingModeSelect = document.createElement('select');
         this.rayTracingModeSelect.style.color = 'black';
         this.rayTracingModeSelect.tabIndex = -1;
-        const modes = ['Normal Shading', 'Normals', 'Distance', 'Reflectance Debug'];
+        const modes = ['Normal Shading', 'Normals', 'Distance', 'Reflectance Debug', 'Ray Directions'];
         modes.forEach((mode, index) => {
             const option = document.createElement('option');
             option.value = index.toString();

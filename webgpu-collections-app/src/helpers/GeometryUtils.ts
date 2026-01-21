@@ -465,7 +465,7 @@ export function createCornellBox(): TopologyInformation
         [549.6, 0.0, 559.2],
         white,
         false,
-        0.8
+        0.98
     );
     
     // ============== CEILING (white) ============== //
@@ -476,7 +476,7 @@ export function createCornellBox(): TopologyInformation
         [0.0, 548.8, 0.0],
         white,
         false,
-        0.8
+        0.98
     );
     
     // ============== LIGHT (slightly below ceiling) ============== //

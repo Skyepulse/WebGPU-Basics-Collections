@@ -1,4 +1,5 @@
-import { computeNormal } from "./MathUtils"
+import { computeNormal, rotationMatrix3 } from "./MathUtils"
+import * as glm from 'gl-matrix';
 
 //================================//
 interface VertexInformation
@@ -12,6 +13,14 @@ interface VertexInformation
 }
 
 //================================//
+
+//================================//
+interface Transform
+{
+    translation: glm.vec3,
+    rotation: glm.vec3,
+    scale: glm.vec3
+}
 export interface TopologyInformation
 {
     vertexData: Float32Array,
@@ -20,10 +29,11 @@ export interface TopologyInformation
 
     normalData?: Float32Array
     colorData?: Float32Array
-    reflectanceData?: Float32Array
     uvData?: Float32Array
+    reflectanceData?: Float32Array
 
     additionalInfo?: any
+    transform?: Transform
 }
 
 //================================//
@@ -648,6 +658,166 @@ export function createCornellBox(): TopologyInformation
             cubeCenter: [278.0, 224.4, 279.5],
             cubeVertexInfo: new Float32Array(vertices.slice(startCubeVertex * 3, (startCubeVertex + numVerticesCube) * 3)),
             cubeNormalsInfo: new Float32Array(normals.slice(startCubeVertex * 3, (startCubeVertex + numVerticesCube) * 3))
+        }
+    };
+}
+
+//================================//
+export function createQuad(transform: Transform, color: [number, number, number]): TopologyInformation
+{
+    let numVertices = 4;
+    const vertexData: Float32Array = new Float32Array(numVertices * 3);
+    const colorData = new Float32Array(numVertices * 3);
+    const normalData = new Float32Array(numVertices * 3);
+    const uvData = new Float32Array(numVertices * 2);
+    const indexData = new Uint16Array([0, 1, 2, 0, 2, 3]);
+
+    const center = transform.translation;
+    const hx = transform.scale[0] / 2;
+    const hy = transform.scale[1] / 2;
+    const rotation = transform.rotation;
+
+    const corners: glm.vec3[] = [
+        glm.vec3.fromValues(-hx, -hy, 0),
+        glm.vec3.fromValues( hx, -hy, 0),
+        glm.vec3.fromValues( hx,  hy, 0),
+        glm.vec3.fromValues(-hx,  hy, 0)
+    ];
+
+    const rotMat: glm.mat3 = rotationMatrix3(rotation[0], rotation[1], rotation[2]);
+    for (let i = 0; i < corners.length; ++i) {
+        // Rotate
+        glm.vec3.transformMat3(corners[i], corners[i], rotMat);
+        // Translate
+        glm.vec3.add(corners[i], corners[i], center);
+    }
+
+    let offset = 0;
+    const addVertex = (vertex: glm.vec3, color: [number, number, number]) => {
+        vertexData[offset]     = vertex[0];
+        vertexData[offset + 1] = vertex[1];
+        vertexData[offset + 2] = vertex[2];
+
+        colorData[offset]      = color[0];
+        colorData[offset + 1]  = color[1];
+        colorData[offset + 2]  = color[2];
+        offset += 3;
+    };
+
+    addVertex(corners[0], color);
+    addVertex(corners[1], color);
+    addVertex(corners[2], color);
+    addVertex(corners[3], color);
+
+    // normals
+    const normal = glm.vec3.fromValues(0, 0, 1);
+    // Rotate normal
+    glm.vec3.transformMat3(normal, normal, rotMat);
+    for (let i = 0; i < numVertices; ++i) {
+        normalData[i * 3 + 0] = normal[0];
+        normalData[i * 3 + 1] = normal[1];
+        normalData[i * 3 + 2] = normal[2];
+    }
+
+    // uvs
+    uvData[0] = 0; uvData[1] = 0;
+    uvData[2] = 1; uvData[3] = 0;
+    uvData[4] = 1; uvData[5] = 1;
+    uvData[6] = 0; uvData[7] = 1;
+
+    return {
+        vertexData: vertexData,
+        indexData: indexData,
+        colorData: colorData,
+        normalData: normalData,
+        uvData: uvData,
+        numVertices: indexData.length,
+        transform: transform
+    };
+}
+
+//================================//
+export function createSphere(
+        center: [number, number, number],
+        radius: number,
+        color: [number, number, number],
+        latitudeBands: number = 12,
+        longitudeBands: number = 12
+    ): TopologyInformation
+{
+    const vertices: number[] = [];
+    const normals: number[] = [];
+    const colors: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+
+    const addVertex = (
+        position: [number, number, number],
+        normal: [number, number, number],
+        color: [number, number, number],
+        uv: [number, number]) =>
+    {
+        vertices.push(
+            position[0],
+            position[1],
+            position[2]
+        );
+        normals.push(normal[0], normal[1], normal[2]);
+        colors.push(color[0], color[1], color[2]);
+        uvs.push(uv[0], uv[1]);
+    }
+
+    for (let latNumber = 0; latNumber <= latitudeBands; latNumber++)
+    {
+        const theta = latNumber * Math.PI / latitudeBands;
+        const sinTheta = Math.sin(theta);
+        const cosTheta = Math.cos(theta);
+
+        for (let longNumber = 0; longNumber <= longitudeBands; longNumber++)
+        {
+            const phi = longNumber * 2 * Math.PI / longitudeBands;
+            const sinPhi = Math.sin(phi);
+            const cosPhi = Math.cos(phi);
+
+            const x = cosPhi * sinTheta;
+            const y = cosTheta;
+            const z = sinPhi * sinTheta;
+            const u = 1 - (longNumber / longitudeBands);
+            const v = 1 - (latNumber / latitudeBands);
+
+            const vertexPosition: [number, number, number] = [
+                center[0] + radius * x,
+                center[1] + radius * y,
+                center[2] + radius * z
+            ];
+
+            addVertex(vertexPosition, [x, y, z], color, [u, v]);
+        }
+    }
+
+    for (let latNumber = 0; latNumber < latitudeBands; latNumber++)
+    {
+        for (let longNumber = 0; longNumber < longitudeBands; longNumber++)
+        {
+            const first = (latNumber * (longitudeBands + 1)) + longNumber;
+            const second = first + longitudeBands + 1;
+
+            indices.push(first, first + 1, second); // tri 1
+            indices.push(second, first + 1, second + 1); // tri 2
+        }
+    }
+
+    return {
+        vertexData: new Float32Array(vertices),
+        indexData: new Uint16Array(indices),
+        numVertices: indices.length,
+        normalData: new Float32Array(normals),
+        colorData: new Float32Array(colors),
+        uvData: new Float32Array(uvs),
+        transform: {
+            translation: glm.vec3.fromValues(center[0], center[1], center[2]),
+            rotation: glm.vec3.fromValues(0, 0, 0),
+            scale: glm.vec3.fromValues(radius, radius, radius)
         }
     };
 }

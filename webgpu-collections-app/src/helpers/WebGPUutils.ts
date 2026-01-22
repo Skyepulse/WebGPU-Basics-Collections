@@ -152,3 +152,47 @@ export function ResolveTimestampQuery(timestampQuerySet: TimestampQuerySet, enco
 
     return true;
 }
+
+
+/*
+ * Merges multiple Float32Array into a single Float32Array.
+ * @param arrays An array of Float32Array to merge.
+ * @returns A single merged Float32Array, ready to be written to a GPU buffer.
+ */
+export function mergeFloat32Arrays(arrays: Float32Array[]): Float32Array 
+{
+    const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+    const result = new Float32Array(totalLength);
+    let offset = 0;
+    for (const arr of arrays) 
+    {
+        result.set(arr, offset);
+        offset += arr.length;
+    }
+    return result;
+}
+
+/*
+ * Merges multiple Uint16Array into a single Uint16Array, adjusting indices based on vertex counts.
+ * @param arrays An array of Uint16Array to merge.
+ * @param vertexCounts An array of vertex counts corresponding to each index array.
+ * @return A single merged Uint16Array with adjusted indices, ready to be written to a GPU buffer.
+ */
+export function mergeUint16Arrays(arrays: Uint16Array[], vertexCounts: number[]): Uint16Array 
+{
+    const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+    const result = new Uint16Array(totalLength);
+    let offset = 0;
+    let vertexOffset = 0;
+    for (let i = 0; i < arrays.length; i++) 
+    {
+        const arr = arrays[i];
+        for (let j = 0; j < arr.length; j++) 
+        {
+            result[offset + j] = arr[j] + vertexOffset;
+        }
+        offset += arr.length;
+        vertexOffset += vertexCounts[i];
+    }
+    return result;
+}

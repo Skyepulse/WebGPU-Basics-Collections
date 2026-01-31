@@ -44,32 +44,40 @@ fn fs(input: VertexOutput) -> @location(0) vec4f {
     var albedo = material.albedo;
     const kd = 1.0;
     const ka = 0.1;
-    
-    var n = normalize(input.normal);
-    var wi = normalize(uniforms.lights[0].position - input.position);
-    
-    // Diffuse
-    var fd = uniforms.lights[0].color * max(0.0, dot(wi, n));
-    
-    // Ambient should also be multiplied by albedo!
-    var toLight = uniforms.lights[0].position - input.position;
-    var lightDistance = length(toLight);
 
-    // Check if we are in the cone, we know light direction
-    var lightDir = normalize(-uniforms.lights[0].direction);
-    var cosAngle = dot(wi, lightDir);
-    if (cosAngle < cos(uniforms.lights[0].coneAngle)) 
+    var totalColor = vec3f(0.0, 0.0, 0.0);
+    var n = normalize(input.normal);
+
+    for (var i = 0; i < 3; i = i + 1)
     {
-        fd = vec3f(0.0, 0.0, 0.0);
+        if (uniforms.lights[i].enabled > 0.0)
+        {
+            var wi = normalize(uniforms.lights[i].position - input.position);
+        
+            // Diffuse
+            var fd = uniforms.lights[i].color * max(0.0, dot(wi, n));
+            var toLight = uniforms.lights[i].position - input.position;
+            var lightDistance = length(toLight);
+
+            // Check if we are in the cone 
+            var lightDir = normalize(-uniforms.lights[i].direction);
+            var cosAngle = dot(wi, lightDir);
+            if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
+            {
+                fd = vec3f(0.0, 0.0, 0.0);
+            }
+            else
+            {
+                let NdotL = max(0.0, dot(n, wi));
+                let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
+                fd = fd * NdotL * lightAttenuation;
+            }
+            var ambient = ka * albedo;
+            var diffuse = kd * fd * albedo * uniforms.lights[i].intensity * uniforms.lights[i].enabled;
+            
+            totalColor = totalColor + ambient + diffuse;
+        }
     }
-    else
-    {
-        let NdotL = max(0.0, dot(n, wi));
-        let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
-        fd = fd * NdotL * lightAttenuation;
-    }
-    var ambient = ka * albedo;
-    var diffuse = kd * fd * albedo * uniforms.lights[0].intensity * uniforms.lights[0].enabled;
     
-    return vec4f(ambient + diffuse, 1.0);
+    return vec4f(totalColor, 1.0);
 }

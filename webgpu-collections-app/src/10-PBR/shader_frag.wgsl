@@ -220,44 +220,51 @@ fn computeLambertShading(hitPos: vec3f, normal: vec3f, baseColor: vec3f) -> vec3
 {
     let ambientStrength = 0.1;
     let ambientColor = baseColor * ambientStrength;
-    if (uniforms.lights[0].enabled < 0.5)
-    {
-        return ambientColor;
-    }
-    
-    let pos2light = uniforms.lights[0].position - hitPos;
-    let lightDistance = length(pos2light);
-    let wi = normalize(pos2light);
-    let spotDir = normalize(uniforms.lights[0].direction);
 
-    // Are we in the cone
-    let cosAngle = dot(-wi, spotDir);
-    if (cosAngle < cos(uniforms.lights[0].coneAngle)) 
+    var totalColor = vec3f(0.0, 0.0, 0.0);
+    for (var i = 0; i < 3; i++)
     {
-        return ambientColor;
+        if (uniforms.lights[i].enabled < 0.5)
+        {
+            continue;
+        }
+
+        let pos2light = uniforms.lights[i].position - hitPos;
+        let lightDistance = length(pos2light);
+        let wi = normalize(pos2light);
+        let spotDir = normalize(uniforms.lights[i].direction);
+
+        // Are we in the cone
+        let cosAngle = dot(-wi, spotDir);
+        if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
+        {
+            continue;
+        }
+
+        // Shadow ray tracing
+        const shadowBias = 0.0001;
+        var shadowRay: Ray;
+        shadowRay.origin = hitPos + shadowBias * normal;
+        shadowRay.direction = wi;
+
+        var shadowHit: Hit;
+        let inShadow = rayTraceOnce(shadowRay, &shadowHit);
+    
+        // If in shadow (and we find blocker)
+        if (inShadow && shadowHit.distance < lightDistance)
+        {
+            continue;
+        }
+
+        // Not in shadow, compute full Lambert shading
+        let NdotL = max(0.0, dot(normal, wi));
+        let lightAttenuation = uniforms.lights[i].intensity / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
+        let diffuse = baseColor * uniforms.lights[i].color * NdotL * lightAttenuation;
+        
+        totalColor = totalColor + diffuse;
     }
-    
-    // Shadow ray tracing
-    const shadowBias = 0.0001;
-    var shadowRay: Ray;
-    shadowRay.origin = hitPos + shadowBias * normal;
-    shadowRay.direction = wi;
-    
-    var shadowHit: Hit;
-    let inShadow = rayTraceOnce(shadowRay, &shadowHit);
-    
-    // If in shadow (and we find blocker) return only ambient
-    if (inShadow && shadowHit.distance < lightDistance)
-    {
-        return ambientColor;
-    }
-    
-    // Not in shadow - compute full Lambert shading
-    let NdotL = max(0.0, dot(normal, wi));
-    let lightAttenuation = uniforms.lights[0].intensity / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
-    let diffuse = baseColor * uniforms.lights[0].color * NdotL * lightAttenuation;
-    
-    return ambientColor + diffuse;
+   
+    return ambientColor + totalColor;
 }
 
 // ============================== //

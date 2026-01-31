@@ -129,14 +129,34 @@ class RayTracer
         this.rayTracerObjects = {} as rayTracerObjects;
 
         const light1 = {
-            position: glm.vec3.fromValues(276.0, 450.0, 1.0), // Max depth is 559, Max X is 552.
+            position: glm.vec3.fromValues(500, 500.0, 0), // Max depth is 559, Max X is 552.
             intensity: 1000.0,
-            direction: glm.vec3.fromValues(0, -1, 0),
-            coneAngle: Math.PI / 4,
-            color: glm.vec3.fromValues(0.9, 0.9, 1.0),
+            direction: glm.vec3.fromValues(-0.5, -0.9, 1),
+            coneAngle: Math.PI / 6,
+            color: glm.vec3.fromValues(0.85, 0.1, 0.1),
             enabled: true
         };
         this.lights.push(light1);
+
+        const light2 = {
+            position: glm.vec3.fromValues(50, 500.0, 0), 
+            intensity: 1000.0,
+            direction: glm.vec3.fromValues(0.5, -0.9, 1),
+            coneAngle: Math.PI / 6,
+            color: glm.vec3.fromValues(0.1, 0.85, 0.1),
+            enabled: true
+        };
+        this.lights.push(light2);
+
+        const light3 = {
+            position: glm.vec3.fromValues(275, 255, 0),
+            intensity: 1000.0,
+            direction: glm.vec3.fromValues(0, 0, 1),
+            coneAngle: Math.PI / 8,
+            color: glm.vec3.fromValues(0.1, 0.1, 0.85),
+            enabled: true
+        };
+        this.lights.push(light3);
     }
 
     //================================//

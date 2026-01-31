@@ -53,14 +53,15 @@
     import { startup_7 } from './7-Game/main';
     import { startup_8 } from './8-RayTrace/main';
     import { startup_9 } from './9-Transparency/main';
+    import { startup_10 } from './10-PBR/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
     const currentRenderer = ref<any>(null);
     const isSwitching = ref(false);
 
-    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9];
+    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10];
     const numberOfExamples = startupFunctions.length;
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Textures', 'Game', 'Ray Trace', 'Transparency'];
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Textures', 'Game', 'Ray Trace', 'Transparency', 'PBR'];
 
     // Slider state
     const hoveredIndex = ref<number|null>(null);

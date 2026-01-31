@@ -1,3 +1,5 @@
+import * as glm from 'gl-matrix';
+
 //================================//
 interface Camera
 {
@@ -414,4 +416,47 @@ export function validatePixelToRayMatrix(camera: Camera): boolean
     }
     
     return isValid;
+}
+
+//================================//
+// Knowing camera parameters, and NDC coordinates which can be screen coordinates, 
+// return direction ray in world space
+export function cameraPointToRay(camera: Camera, ndcX: number, ndcY: number): Float32Array
+{
+    const M = computePixelToRayMatrix(camera);
+    
+    // NDC to ray direction in world space
+    const rayDir = new Float32Array([
+        M[0] * ndcX + M[4] * ndcY + M[8] * 1.0,
+        M[1] * ndcX + M[5] * ndcY + M[9] * 1.0,
+        M[2] * ndcX + M[6] * ndcY + M[10] * 1.0,
+    ]);
+    vec3Normalize(rayDir);
+    return rayDir;
+}
+
+//================================//
+export function rayIntersectsSphere(rayOrigin: Float32Array, rayDir: Float32Array, sphereCenter: glm.vec3, sphereRadius: number): number
+{
+    const L = new Float32Array([
+        sphereCenter[0] - rayOrigin[0],
+        sphereCenter[1] - rayOrigin[1],
+        sphereCenter[2] - rayOrigin[2],
+    ]);
+    const tca = vec3Dot(L, rayDir);
+    if (tca < 0) return -1;
+
+    const d2 = vec3Dot(L, L) - tca * tca;
+    const radius2 = sphereRadius * sphereRadius;
+    if (d2 > radius2) return -1;
+    
+
+    // return distance
+    const thc = Math.sqrt(radius2 - d2);
+    const t0 = tca - thc;
+    
+    // Inside the sphere?
+    if (t0 < 0) return -1;
+    
+    return t0;
 }

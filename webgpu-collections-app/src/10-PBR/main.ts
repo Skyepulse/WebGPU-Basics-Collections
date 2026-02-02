@@ -25,9 +25,10 @@ export async function startup_10(canvas: HTMLCanvasElement)
 }
 
 //================================//
-const normalUniformDataSize = (16 * 3) * 4 + 16 * 4 +(48 * 3); // Three matrices + three spotlights max + four floats
-const materialUniformDataSize = (4 * 4); // 16 bytes
+const normalUniformDataSize = (16 * 3) * 4 + 2 * 16 * 4 + (48 * 3); // Three matrices + three spotlights max + four floats + camera pos and padding
+const materialUniformDataSize = (32); // albedo + metalness + roughness + padding
 const rayTracerUniformDataSize = 224 + 16*4; // = 224 bytes + four floats
+const materialFlattenedSize = 5; // three floats for albedo + metalness + roughness
 
 interface normalObjects extends PipelineResources
 {
@@ -245,6 +246,63 @@ class RayTracer
             utilElement.appendChild(document.createElement('br'));
             utilElement.appendChild(lightButton);
         });
+
+        // ac, al, aq sliders
+        const acLabel = document.createElement('label');
+        acLabel.htmlFor = 'acSlider';
+        acLabel.textContent = `Constant (ac): ${this.a_c.toFixed(2)}`;
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(acLabel);
+
+        const acSlider = document.createElement('input');
+        acSlider.type = 'range';
+        acSlider.min = '0.0';
+        acSlider.max = '2.0';
+        acSlider.step = '0.01';
+        acSlider.value = this.a_c.toString();
+        acSlider.tabIndex = -1;
+        acSlider.addEventListener('input', () => {
+            this.a_c = parseFloat(acSlider.value);
+            acLabel.textContent = `Constant (ac): ${this.a_c.toFixed(2)}`;
+        });
+        utilElement.appendChild(acSlider);
+
+        const alLabel = document.createElement('label');
+        alLabel.htmlFor = 'alSlider';
+        alLabel.textContent = `Linear (al): ${this.a_l.toFixed(3)}`;
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(alLabel);
+
+        const alSlider = document.createElement('input');
+        alSlider.type = 'range';
+        alSlider.min = '0.0';
+        alSlider.max = '0.5';
+        alSlider.step = '0.001';
+        alSlider.value = this.a_l.toString();
+        alSlider.tabIndex = -1;
+        alSlider.addEventListener('input', () => {
+            this.a_l = parseFloat(alSlider.value);
+            alLabel.textContent = `Linear (al): ${this.a_l.toFixed(3)}`;
+        });
+        utilElement.appendChild(alSlider);
+
+        const aqLabel = document.createElement('label');
+        aqLabel.htmlFor = 'aqSlider';
+        aqLabel.textContent = `Quadratic (aq): ${this.a_q.toFixed(4)}`;
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(aqLabel);
+        const aqSlider = document.createElement('input');
+        aqSlider.type = 'range';
+        aqSlider.min = '0.0';
+        aqSlider.max = '0.1';
+        aqSlider.step = '0.0001';
+        aqSlider.value = this.a_q.toString();
+        aqSlider.tabIndex = -1;
+        aqSlider.addEventListener('input', () => {  
+            this.a_q = parseFloat(aqSlider.value);
+            aqLabel.textContent = `Quadratic (aq): ${this.a_q.toFixed(4)}`; 
+        });
+        utilElement.appendChild(aqSlider);
     }
 
     //================================//
@@ -491,7 +549,11 @@ class RayTracer
                 size: materialUniformDataSize,
                 usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
             }));
-            const materialData = new Float32Array(info.materials[matNum].albedo);
+            const materialData = new ArrayBuffer(materialUniformDataSize);
+            const float32View = new Float32Array(materialData);
+            float32View.set(info.materials[matNum].albedo, 0);
+            float32View[3] = info.materials[matNum].metalness;
+            float32View[4] = info.materials[matNum].roughness;
             this.device.queue.writeBuffer(this.normalObjects.materialUniforms[matNum], 0, materialData as BufferSource);
 
             this.normalObjects.materialBindGroups.push(this.device.createBindGroup({
@@ -655,6 +717,8 @@ class RayTracer
         for (let mat of this.normalObjects.perMaterialTopologies.materials)
         {
             flattenedMaterials.push(...mat.albedo);
+            flattenedMaterials.push(mat.metalness);
+            flattenedMaterials.push(mat.roughness);
         }
         const materialData = new Float32Array(flattenedMaterials);
 
@@ -827,10 +891,11 @@ class RayTracer
             floatView.set(this.camera.modelMatrix, 0);
             floatView.set(this.camera.viewMatrix, 16);
             floatView.set(this.camera.projectionMatrix, 32);
-            floatView[48] = this.a_c;
-            floatView[49] = this.a_l;
-            floatView[50] = this.a_q;
-            floatView[51] = 0.0; // pad
+            floatView.set(this.camera.position, 48); // vec3 + pad
+            floatView[52] = this.a_c;
+            floatView[53] = this.a_l;
+            floatView[54] = this.a_q;
+            floatView[55] = 0.0; // pad
 
             for (let i = 0; i < 3; i++)
             {
@@ -838,7 +903,7 @@ class RayTracer
                     break;
 
                 const light = this.lights[i];
-                const baseIndex = 52 + i * 12;
+                const baseIndex = 56 + i * 12;
 
                 floatView.set(light.position, baseIndex);
                 floatView[baseIndex + 3] = light.intensity;
@@ -895,7 +960,7 @@ class RayTracer
                     view: textureView,
                     loadOp: 'clear',
                     storeOp: 'store',
-                    clearValue: { r: 0.3, g: 0.3, b: 0.3, a: 1 }
+                    clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1 }
                 }],
                 depthStencilAttachment: depthStencilAttachment,
                 ... (this.timestampQuerySet != null && {
@@ -1068,14 +1133,17 @@ class RayTracer
 
         // Do not create a new buffer, just update existing one we know the offset in the buffer of the aforementioned material
         const materialBufferIndex = this.spheresInfo!.sphereMaterialIndices[sphereIndex];
-        const materialData = new Float32Array(newMaterial.albedo);
+        const materialData = new ArrayBuffer(materialUniformDataSize);
+        const float32View = new Float32Array(materialData);
+        float32View.set(newMaterial.albedo, 0);
+        float32View[3] = newMaterial.metalness;
+        float32View[4] = newMaterial.roughness;
         
         // Change it in normal pipeline, that is write on it's uniform buffer
         let buffer = this.normalObjects.materialUniforms[materialBufferIndex];
         this.device!.queue.writeBuffer(buffer, 0, materialData as BufferSource);
 
         // Change it in the ray tracing pipeline. Carful, here the offset in the buffer is materialBufferIndex * materialFlattenedSize
-        const materialFlattenedSize = 3; // three floats for albedo
         const offset = materialBufferIndex * materialFlattenedSize * 4; // in bytes
         this.device!.queue.writeBuffer(this.rayTracerObjects.materialBuffer, offset, materialData as BufferSource);
     }

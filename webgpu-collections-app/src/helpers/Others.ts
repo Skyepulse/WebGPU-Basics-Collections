@@ -81,6 +81,60 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
 
     menu.appendChild(albedoSection);
 
+    // Metalness
+    const metalnessSelection = document.createElement('div');
+    metalnessSelection.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 12px;';
+
+    const metalnessLabel = document.createElement('label');
+    metalnessLabel.textContent = `Metalness: ${currentMaterial.metalness.toFixed(2)}`;
+    metalnessSelection.appendChild(metalnessLabel);
+
+    const metalnessSlider = document.createElement('input');
+    metalnessSlider.type = 'range';
+    metalnessSlider.min = '0';  
+    metalnessSlider.max = '1';
+    metalnessSlider.step = '0.01';
+    metalnessSlider.value = currentMaterial.metalness.toString();
+    metalnessSlider.style.cssText = `
+        flex: 1;
+        cursor: pointer;
+    `;
+    metalnessSlider.tabIndex = -1;
+    metalnessSelection.appendChild(metalnessSlider);
+    menu.appendChild(metalnessSelection);
+    metalnessSlider.addEventListener('input', () => {
+        const val = parseFloat(metalnessSlider.value);
+        currentMaterial.metalness = isNaN(val) ? 0 : val;
+        metalnessLabel.textContent = `Metalness: ${currentMaterial.metalness.toFixed(2)}`;
+    });
+
+    // Roughness
+    const roughnessSelection = document.createElement('div');
+    roughnessSelection.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 12px;';
+
+    const roughnessLabel = document.createElement('label');
+    roughnessLabel.textContent = `Roughness: ${currentMaterial.roughness.toFixed(2)}`;
+    roughnessSelection.appendChild(roughnessLabel);
+
+    const roughnessSlider = document.createElement('input');
+    roughnessSlider.type = 'range';
+    roughnessSlider.min = '0';
+    roughnessSlider.max = '1';
+    roughnessSlider.step = '0.01';
+    roughnessSlider.value = currentMaterial.roughness.toString();
+    roughnessSlider.style.cssText = `
+        flex: 1;
+        cursor: pointer;
+    `;
+    roughnessSlider.tabIndex = -1;
+    roughnessSelection.appendChild(roughnessSlider);
+    menu.appendChild(roughnessSelection);
+    roughnessSlider.addEventListener('input', () => {
+        const val = parseFloat(roughnessSlider.value);
+        currentMaterial.roughness = isNaN(val) ? 0 : val;
+        roughnessLabel.textContent = `Roughness: ${currentMaterial.roughness.toFixed(2)}`;
+    });
+
     // Buttons row
     const buttonsRow = document.createElement('div');
     buttonsRow.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
@@ -105,7 +159,9 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
 
         const newMaterial: Material = {
             name: currentMaterial.name,
-            albedo: [r, g, b]
+            albedo: [r, g, b],
+            roughness: currentMaterial.roughness,
+            metalness: currentMaterial.metalness
         };
         onApplyCallback(newMaterial);
     });

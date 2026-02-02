@@ -30,6 +30,8 @@ struct Uniform
 struct Material
 {
     albedo: vec3f,
+    metalness: f32,
+    roughness: f32,
 };
 
 // MODE FOLLOWS:
@@ -96,7 +98,7 @@ fn getUV(index: u32) -> vec2f
 fn getMaterial(TriIndex: u32) -> Material
 {
     let materialIndex = materialIndices[TriIndex]; // Which material are we talking about ?
-    let baseIndex = materialIndex * 3u;
+    let baseIndex = materialIndex * 5u; // Each material uses 5 floats
 
     var mat: Material;
     mat.albedo = vec3f(
@@ -104,6 +106,8 @@ fn getMaterial(TriIndex: u32) -> Material
         materials[baseIndex + 1u],
         materials[baseIndex + 2u]
     );
+    mat.metalness = materials[baseIndex + 3u];
+    mat.roughness = materials[baseIndex + 4u];
     return mat;
 }
 
@@ -216,6 +220,102 @@ fn getHitPosition(ray: Ray, distance: f32) -> vec3f
 }
 
 // ============================== //
+fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material) -> vec3f
+{
+    let albedo = material.albedo;
+    let alphap = max(material.roughness, 0.04);
+    let metalness = material.metalness;
+
+    let ka = 0.1;
+    var n = normalize(normal);
+    let pi = 3.14159265359;
+
+    var totalColor = ka * albedo * (1.0 - metalness); // Prepare a small ambient term
+
+    for (var i = 0; i < 3; i = i + 1)
+    {
+        if (uniforms.lights[i].enabled < 0.5)
+        {
+            continue;
+        }
+
+        let toLight = uniforms.lights[i].position - hitPos;
+        let lightDistance = length(toLight);
+        let wi = normalize(toLight);
+
+        let toCamera = uniforms.cameraPosition - hitPos;
+        let wo = normalize(toCamera);
+
+        let wh = normalize(wi + wo);
+
+        // Dot products
+        let NdotV = max(dot(n, wo), 0.0001);
+        let NdotL = max(dot(n, wi), 0.0001);
+        let NdotH = max(dot(n, wh), 0.0);
+        let LdotH = max(dot(wi, wh), 0.0);
+
+        // Check if we are in the cone 
+        var lightDir = normalize(uniforms.lights[i].direction);
+        var cosAngle = dot(-wi, lightDir);
+        if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
+        {
+            continue;
+        }
+
+        // Shadow ray tracing
+        const shadowBias = 0.0001;
+        var shadowRay: Ray;
+        shadowRay.origin = hitPos + shadowBias * normal;
+        shadowRay.direction = wi;
+
+        var shadowHit: Hit;
+        let inShadow = rayTraceOnce(shadowRay, &shadowHit);
+    
+        // If in shadow (and we find blocker)
+        if (inShadow && shadowHit.distance < lightDistance)
+        {
+            continue;
+        }
+
+        // Fresnel term (schlick's approximation)
+        let F0 = mix(vec3(0.04), albedo, metalness);
+        let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
+
+        // f = fd + fs
+        // fd = lambert BRDF
+        // fs = microfacet BRDF = DFG term
+
+        // DIFFUSE
+        let lambert = albedo / pi;
+        let kd = (1.0 - F) * (1.0 - metalness);
+        let fd = kd * lambert;
+
+        // SPECULAR
+
+        // Trowbridge-Reitz Distribution
+        let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
+
+        // Geometry term (GGX)
+        let K = (alphap) * sqrt(2.0 / pi);
+        let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
+        let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
+        let G = G_schlick_wo * G_schlick_wi;
+
+        let EPSILON = 0.0001;
+        let fs = (D * F * G) / (4.0 * NdotL * NdotV + EPSILON);
+
+        let f = fd + fs;
+
+        let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
+        let radiance = uniforms.lights[i].intensity * uniforms.lights[i].color * lightAttenuation;
+
+        totalColor = totalColor + f * radiance * NdotL;
+    }
+
+    return totalColor;
+} 
+
+// ============================== //
 fn computeLambertShading(hitPos: vec3f, normal: vec3f, baseColor: vec3f) -> vec3f
 {
     let ambientStrength = 0.1;
@@ -296,8 +396,9 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
         if (rayTraceOnce(ray, &hit))
         {
             let hitPos = getHitPosition(ray, hit.distance);
-            let baseColor = getHitColor(hit);
-            color = computeLambertShading(hitPos, hit.normalAtHit, baseColor);
+            let material = getMaterial(hit.triIndex);
+            //color = computeLambertShading(hitPos, hit.normalAtHit, material.albedo);
+            color = computeMicrofacetBRDF(hitPos, hit.normalAtHit, material);
         }
         else
         {

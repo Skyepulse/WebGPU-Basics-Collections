@@ -5,7 +5,7 @@ import FragWGSL from './shader_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, mergeFloat32Arrays, mergeUint16Arrays } from '@src/helpers/WebGPUutils';
 import type { ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createQuad, createSphere, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import { createCamera, moveCameraLocal, rotateCameraBy, rotateCameraByMouse, setCameraAspect, setCameraNearFar, setCameraPosition } from '@src/helpers/CameraHelpers';
 import * as glm from 'gl-matrix';
@@ -893,11 +893,7 @@ class TransparencyRenderer
             });
         }
 
-        const utilElement = getUtilElement();
-        for (const child of Array.from(utilElement?.children || []))
-        {
-            child.remove();
-        }
+        cleanUtilElement();
 
         if (this.animationFrameId !== null) {
             cancelAnimationFrame(this.animationFrameId);

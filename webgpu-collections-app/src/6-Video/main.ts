@@ -5,7 +5,7 @@ import simpleTextureFragWGSL from './simpleTexture_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createQuadVertices, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import {mat4} from 'wgpu-matrix';
 import { rand } from '@src/helpers/MathUtils';
@@ -477,22 +477,10 @@ class TextureExampleRenderer
         // Other cleanup tasks
         if(this.slider)
         {
-            const utilElement = getUtilElement();
-            // Remove all children
-            if (utilElement !== null) {
-                while (utilElement.firstChild) {
-                    utilElement.removeChild(utilElement.firstChild);
-                }
-            }
             this.slider = null;
         }
 
-        if (this.infoElement)
-        {
-            while(this.infoElement.firstChild) {
-                this.infoElement.removeChild(this.infoElement.firstChild);
-            }
-        }
+        cleanUtilElement();
     }
 
     //================================//

@@ -11,7 +11,7 @@ import normalFragWgsl from './normal_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
+import { cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay, rayIntersectsSphere } from '@src/helpers/CameraHelpers';
 import { createCornellBox2, type Material, type PerMaterialTopologyInformation, type Transform } from '@src/helpers/GeometryUtils';
 
@@ -28,8 +28,9 @@ export async function startup_10(canvas: HTMLCanvasElement)
 const normalUniformDataSize = (16 * 3) * 4 + 2 * 16 * 4 + (48 * 3); // Three matrices + three spotlights max + four floats + camera pos and padding
 const materialUniformDataSize = (32); // albedo + metalness + roughness + padding
 const rayTracerUniformDataSize = 224 + 16*4; // = 224 bytes + four floats
-const materialFlattenedSize = 5; // three floats for albedo + metalness + roughness
+const materialFlattenedSize = 8; // three floats for albedo + metalness + roughness + 2 bools and one freq float
 
+//================================//
 interface normalObjects extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
@@ -151,10 +152,10 @@ class RayTracer
 
         const light3 = {
             position: glm.vec3.fromValues(275, 255, 0),
-            intensity: 1000.0,
+            intensity: 1500.0,
             direction: glm.vec3.fromValues(0, 0, 1),
-            coneAngle: Math.PI / 8,
-            color: glm.vec3.fromValues(0.1, 0.1, 0.85),
+            coneAngle: Math.PI / 6,
+            color: glm.vec3.fromValues(0.9, 0.9, 0.9),
             enabled: true
         };
         this.lights.push(light3);
@@ -181,25 +182,6 @@ class RayTracer
         utilElement.appendChild(this.useRaytracingCheckBox);
         utilElement.appendChild(useRaytracingLabel);
 
-        // UNDER THEM a SELECT FOR RAY TRACING MODE
-        this.rayTracingModeSelect = document.createElement('select');
-        this.rayTracingModeSelect.style.color = 'black';
-        this.rayTracingModeSelect.tabIndex = -1;
-        const modes = ['Normal Shading', 'Normals', 'Distance', 'Ray Directions'];
-        modes.forEach((mode, index) => {
-            const option = document.createElement('option');
-            option.value = index.toString();
-            option.text = mode;
-            this.rayTracingModeSelect!.appendChild(option);
-        });
-        this.rayTracingModeSelect.value = this.rayTracingMode.toString();
-        this.rayTracingModeSelect.addEventListener('change', () => {
-            this.rayTracingMode = parseInt(this.rayTracingModeSelect!.value) as RayTracingMode;
-        });
-
-        utilElement.appendChild(document.createElement('br'));
-        utilElement.appendChild(this.rayTracingModeSelect);
-
         // Resolution slider
         this.sphereResolutionSlider = document.createElement('input');
         this.sphereResolutionSlider.type = 'range';
@@ -225,6 +207,7 @@ class RayTracer
         this.lights.forEach((_, index) =>
         {
             const lightButton = document.createElement('button');
+            lightButton.style.cssText = 'background-color: #444444; color: white; border: none; padding: 5px 10px; margin-top: 5px; cursor: pointer;';
             lightButton.textContent = `Edit Light ${index + 1}`;
             lightButton.tabIndex = -1;
             lightButton.addEventListener('click', (e) => {
@@ -238,7 +221,7 @@ class RayTracer
                     y: (this.canvas!.offsetTop + this.canvas!.height / 2 - 150)
                 };
                 this.activeContextMenu = createLightContextMenu(middleOfCanvas, this.lights[index], `Edit Light ${index + 1}`, 
-                    (newLight) => { this.lights[index] = newLight; this.activeContextMenu?.remove(); this.activeContextMenu = null; },
+                    (newLight) => { this.lights[index] = newLight; },
                     () => { this.activeContextMenu?.remove(); this.activeContextMenu = null; }
                 );
                 document.body.appendChild(this.activeContextMenu);
@@ -553,7 +536,10 @@ class RayTracer
             const float32View = new Float32Array(materialData);
             float32View.set(info.materials[matNum].albedo, 0);
             float32View[3] = info.materials[matNum].metalness;
-            float32View[4] = info.materials[matNum].roughness;
+            float32View[4] = info.materials[matNum].usePerlinMetalness ? 1.0 : 0.0;
+            float32View[5] = info.materials[matNum].roughness;
+            float32View[6] = info.materials[matNum].usePerlinRoughness ? 1.0 : 0.0;
+            float32View[7] = info.materials[matNum].perlinFreq;
             this.device.queue.writeBuffer(this.normalObjects.materialUniforms[matNum], 0, materialData as BufferSource);
 
             this.normalObjects.materialBindGroups.push(this.device.createBindGroup({
@@ -718,7 +704,10 @@ class RayTracer
         {
             flattenedMaterials.push(...mat.albedo);
             flattenedMaterials.push(mat.metalness);
+            flattenedMaterials.push(mat.usePerlinMetalness ? 1.0 : 0.0);
             flattenedMaterials.push(mat.roughness);
+            flattenedMaterials.push(mat.usePerlinRoughness ? 1.0 : 0.0);
+            flattenedMaterials.push(mat.perlinFreq);
         }
         const materialData = new Float32Array(flattenedMaterials);
 
@@ -817,7 +806,7 @@ class RayTracer
         if (this.keysPressed.has('q') || this.keysPressed.has('a')) dx -= this.camera.moveSpeed; // Left
         if (this.keysPressed.has('d')) dx += this.camera.moveSpeed; // Right
         if (this.keysPressed.has(' ')) dy += this.camera.moveSpeed; // Up (space)
-        if (this.keysPressed.has('shift')) dy -= this.camera.moveSpeed; // Down (shift)
+        if (this.keysPressed.has('alt')) dy -= this.camera.moveSpeed; // Down (alt)
 
         if (dx !== 0 || dy !== 0 || dz !== 0) 
         {
@@ -1102,11 +1091,7 @@ class RayTracer
         // Clean rest of handlers
         this.removeInputHandlers();
 
-        const utilElement = getUtilElement();
-        for (const child of Array.from(utilElement?.children || []))
-        {
-            child.remove();
-        }
+        cleanUtilElement();
 
         if (this.animationFrameId !== null) {
             cancelAnimationFrame(this.animationFrameId);
@@ -1137,7 +1122,10 @@ class RayTracer
         const float32View = new Float32Array(materialData);
         float32View.set(newMaterial.albedo, 0);
         float32View[3] = newMaterial.metalness;
-        float32View[4] = newMaterial.roughness;
+        float32View[4] = newMaterial.usePerlinMetalness ? 1.0 : 0.0;
+        float32View[5] = newMaterial.roughness;
+        float32View[6] = newMaterial.usePerlinRoughness ? 1.0 : 0.0;
+        float32View[7] = newMaterial.perlinFreq;
         
         // Change it in normal pipeline, that is write on it's uniform buffer
         let buffer = this.normalObjects.materialUniforms[materialBufferIndex];
@@ -1207,7 +1195,6 @@ class RayTracer
             currentMaterial,
             (newMaterial: Material) => {
                 this.changeSphereMaterial(sphereIndex, newMaterial);
-                this.removeContextMenu();
             },
             () => {
                 this.removeContextMenu();

@@ -8,7 +8,7 @@ import normalFragWgsl from './normal_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy } from '@src/helpers/CameraHelpers';
 import { createCornellBox, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import { rotationMatrix3 } from '@src/helpers/MathUtils';
@@ -613,7 +613,7 @@ class RayTracer
         if (this.keysPressed.has('q') || this.keysPressed.has('a')) dx -= this.camera.moveSpeed; // Left
         if (this.keysPressed.has('d')) dx += this.camera.moveSpeed; // Right
         if (this.keysPressed.has(' ')) dy += this.camera.moveSpeed; // Up (space)
-        if (this.keysPressed.has('shift')) dy -= this.camera.moveSpeed; // Down (shift)
+        if (this.keysPressed.has('alt')) dy -= this.camera.moveSpeed; // Down (alt)
 
         if (dx !== 0 || dy !== 0 || dz !== 0) 
         {
@@ -928,11 +928,7 @@ class RayTracer
             });
         }
 
-        const utilElement = getUtilElement();
-        for (const child of Array.from(utilElement?.children || []))
-        {
-            child.remove();
-        }
+        cleanUtilElement();
 
         if (this.animationFrameId !== null) {
             cancelAnimationFrame(this.animationFrameId);

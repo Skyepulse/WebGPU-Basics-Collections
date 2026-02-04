@@ -165,3 +165,15 @@ export function cross2(a: glm.vec2, b: glm.vec2): number
       const edge2 = vec3Subtract(v2, v0);
       return vec3Normalize(vec3Cross(edge1, edge2));
   }
+
+//================================//
+export function radsToDegrees(rads: number): number
+{
+  return rads * (180 / Math.PI);
+}
+
+//================================//
+export function degreesToRads(degrees: number): number
+{
+  return degrees * (Math.PI / 180);
+}

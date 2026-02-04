@@ -1,5 +1,6 @@
 import { type Material } from "@src/helpers/GeometryUtils.ts";
 import * as glm from "gl-matrix";
+import { degreesToRads, radsToDegrees } from "./MathUtils";
 
 //================================//
 export function getInfoElement(): HTMLElement | null 
@@ -11,6 +12,35 @@ export function getInfoElement(): HTMLElement | null
 export function getUtilElement(): HTMLElement | null
 {
     return document.getElementById("utils");
+}
+
+//================================//
+export function addUtilElementDefaults(): void
+{
+    const utilElement = getUtilElement();
+    if (utilElement)
+    {
+        // NOTHING YET
+    }
+}
+
+//================================//
+export function cleanUtilElement(): void
+{
+    const utilElement = getUtilElement();
+
+    //================================//
+    if (utilElement)
+    {
+        while(utilElement.firstChild) 
+        {
+            utilElement.removeChild(utilElement.firstChild);
+        }
+    }
+
+    //================================//
+    // Add back the constants
+    addUtilElementDefaults();
 }
 
 //================================//
@@ -77,6 +107,11 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
 
     colorPicker.addEventListener('input', () => {
         hexDisplay.textContent = colorPicker.value.toUpperCase();
+        const r = parseInt(colorPicker.value.slice(1, 3), 16) / 255;
+        const g = parseInt(colorPicker.value.slice(3, 5), 16) / 255;
+        const b = parseInt(colorPicker.value.slice(5, 7), 16) / 255;
+        currentMaterial.albedo = [r, g, b];
+        onApplyCallback(currentMaterial);
     });
 
     menu.appendChild(albedoSection);
@@ -106,6 +141,21 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
         const val = parseFloat(metalnessSlider.value);
         currentMaterial.metalness = isNaN(val) ? 0 : val;
         metalnessLabel.textContent = `Metalness: ${currentMaterial.metalness.toFixed(2)}`;
+        onApplyCallback(currentMaterial);
+    });
+
+    const usePerlinMetalnessLabel = document.createElement('label');
+    usePerlinMetalnessLabel.textContent = 'Perlin noise';
+    metalnessSelection.appendChild(usePerlinMetalnessLabel);
+
+    const usePerlinMetalnessCheckbox = document.createElement('input');
+    usePerlinMetalnessCheckbox.type = 'checkbox';
+    usePerlinMetalnessCheckbox.checked = currentMaterial.usePerlinMetalness;
+    usePerlinMetalnessCheckbox.tabIndex = -1;
+    metalnessSelection.appendChild(usePerlinMetalnessCheckbox);
+    usePerlinMetalnessCheckbox.addEventListener('change', () => {
+        currentMaterial.usePerlinMetalness = usePerlinMetalnessCheckbox.checked;
+        onApplyCallback(currentMaterial);
     });
 
     // Roughness
@@ -133,38 +183,54 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
         const val = parseFloat(roughnessSlider.value);
         currentMaterial.roughness = isNaN(val) ? 0 : val;
         roughnessLabel.textContent = `Roughness: ${currentMaterial.roughness.toFixed(2)}`;
+        onApplyCallback(currentMaterial);
+    });
+
+    const usePerlinRoughnessLabel = document.createElement('label');
+    usePerlinRoughnessLabel.textContent = 'Perlin noise';
+    roughnessSelection.appendChild(usePerlinRoughnessLabel);
+
+    const usePerlinRoughnessCheckbox = document.createElement('input');
+    usePerlinRoughnessCheckbox.type = 'checkbox';
+    usePerlinRoughnessCheckbox.checked = currentMaterial.usePerlinRoughness;
+    usePerlinRoughnessCheckbox.tabIndex = -1;
+    roughnessSelection.appendChild(usePerlinRoughnessCheckbox);
+    usePerlinRoughnessCheckbox.addEventListener('change', () => {
+        currentMaterial.usePerlinRoughness = usePerlinRoughnessCheckbox.checked;
+        onApplyCallback(currentMaterial);
+    });
+
+    // perlin frequency
+    const perlinFreqSelection = document.createElement('div');
+    perlinFreqSelection.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 12px;';
+
+    const perlinFreqLabel = document.createElement('label');
+    perlinFreqLabel.textContent = `Perlin Frequency: ${currentMaterial.perlinFreq.toFixed(2)}`;
+    perlinFreqSelection.appendChild(perlinFreqLabel);
+
+    const perlinFreqSlider = document.createElement('input');
+    perlinFreqSlider.type = 'range';
+    perlinFreqSlider.min = '0.1';
+    perlinFreqSlider.max = '10';
+    perlinFreqSlider.step = '0.1';
+    perlinFreqSlider.value = currentMaterial.perlinFreq.toString();
+    perlinFreqSlider.style.cssText = `
+        flex: 1;
+        cursor: pointer;
+    `;
+    perlinFreqSlider.tabIndex = -1;
+    perlinFreqSelection.appendChild(perlinFreqSlider);
+    menu.appendChild(perlinFreqSelection);
+    perlinFreqSlider.addEventListener('input', () => {
+        const val = parseFloat(perlinFreqSlider.value);
+        currentMaterial.perlinFreq = isNaN(val) ? 0.1 : val;
+        perlinFreqLabel.textContent = `Perlin Frequency: ${currentMaterial.perlinFreq.toFixed(2)}`;
+        onApplyCallback(currentMaterial);
     });
 
     // Buttons row
     const buttonsRow = document.createElement('div');
     buttonsRow.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
-
-    const applyButton = document.createElement('button');
-    applyButton.textContent = 'Apply';
-    applyButton.style.cssText = `
-        padding: 6px 16px;
-        background: #4a9eff;
-        border: none;
-        border-radius: 4px;
-        color: white;
-        cursor: pointer;
-        font-size: 13px;
-    `;
-    applyButton.tabIndex = -1;
-    applyButton.addEventListener('click', () => {
-        const hex = colorPicker.value;
-        const r = parseInt(hex.slice(1, 3), 16) / 255;
-        const g = parseInt(hex.slice(3, 5), 16) / 255;
-        const b = parseInt(hex.slice(5, 7), 16) / 255;
-
-        const newMaterial: Material = {
-            name: currentMaterial.name,
-            albedo: [r, g, b],
-            roughness: currentMaterial.roughness,
-            metalness: currentMaterial.metalness
-        };
-        onApplyCallback(newMaterial);
-    });
 
     const cancelButton = document.createElement('button');
     cancelButton.textContent = 'Cancel';
@@ -183,7 +249,6 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
     });
 
     buttonsRow.appendChild(cancelButton);
-    buttonsRow.appendChild(applyButton);
     menu.appendChild(buttonsRow);
 
     return menu;
@@ -244,6 +309,7 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
     enabledSelection.appendChild(enabledCheckbox);
     enabledCheckbox.addEventListener('change', () => {
         currentLight.enabled = enabledCheckbox.checked;
+        onApplyCallback(currentLight);
     });
     menu.appendChild(enabledSelection);
 
@@ -272,6 +338,7 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
         input.addEventListener('input', () => {
             const val = parseFloat(input.value);
             currentLight.position[index] = isNaN(val) ? 0 : val;
+            onApplyCallback(currentLight);
         });
         input.placeholder = axis;
     });
@@ -301,6 +368,7 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
         input.addEventListener('input', () => {
             const val = parseFloat(input.value);
             currentLight.direction[index] = isNaN(val) ? 0 : val;
+            onApplyCallback(currentLight);
         });
         input.placeholder = axis;
     });
@@ -330,6 +398,7 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
     intensityInput.addEventListener('input', () => {
         const val = parseFloat(intensityInput.value);
         currentLight.intensity = isNaN(val) ? 0 : val;
+        onApplyCallback(currentLight);
     });
     menu.appendChild(intensitySelection);
 
@@ -342,8 +411,10 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
     coneAngleSelection.appendChild(coneAngleLabel);
 
     const coneAngleInput = document.createElement('input');
-    coneAngleInput.type = 'number';
-    coneAngleInput.value = currentLight.coneAngle.toFixed(2);
+    coneAngleInput.type = 'range';
+    coneAngleInput.value = radsToDegrees(currentLight.coneAngle).toFixed(2);
+    coneAngleInput.min = '0';
+    coneAngleInput.max = '180';
     coneAngleInput.style.cssText = `
         width: 80px;
         padding: 4px;
@@ -356,7 +427,9 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
     coneAngleSelection.appendChild(coneAngleInput);
     coneAngleInput.addEventListener('input', () => {
         const val = parseFloat(coneAngleInput.value);
-        currentLight.coneAngle = isNaN(val) ? 0 : val;
+        const rads = degreesToRads(val);
+        currentLight.coneAngle = isNaN(rads) ? 0 : rads;
+        onApplyCallback(currentLight);
     });
     menu.appendChild(coneAngleSelection);
 
@@ -398,41 +471,13 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
             parseInt(colorPicker.value.slice(3, 5), 16) / 255,
             parseInt(colorPicker.value.slice(5, 7), 16) / 255
         ];
+        onApplyCallback(currentLight);
     });
     menu.appendChild(lightSelection);
 
     // Buttons row
     const buttonsRow = document.createElement('div');
     buttonsRow.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
-
-    const applyButton = document.createElement('button');
-    applyButton.textContent = 'Apply';
-    applyButton.style.cssText = `
-        padding: 6px 16px;
-        background: #4a9eff;
-        border: none;
-        border-radius: 4px;
-        color: white;
-        cursor: pointer;
-        font-size: 13px;
-    `;
-    applyButton.tabIndex = -1;
-    applyButton.addEventListener('click', () => {
-        const hex = colorPicker.value;
-        const r = parseInt(hex.slice(1, 3), 16) / 255;
-        const g = parseInt(hex.slice(3, 5), 16) / 255;
-        const b = parseInt(hex.slice(5, 7), 16) / 255;
-
-        const newLight: SpotLight = {
-            position: currentLight.position,
-            intensity: currentLight.intensity,
-            direction: currentLight.direction,
-            coneAngle: currentLight.coneAngle,
-            color: [r, g, b],
-            enabled: currentLight.enabled
-        };
-        onApplyCallback(newLight);
-    });
 
     const cancelButton = document.createElement('button');
     cancelButton.textContent = 'Cancel';
@@ -451,7 +496,6 @@ export function createLightContextMenu(position: { x: number; y: number }, curre
     });
 
     buttonsRow.appendChild(cancelButton);
-    buttonsRow.appendChild(applyButton);
     menu.appendChild(buttonsRow);
 
     return menu;

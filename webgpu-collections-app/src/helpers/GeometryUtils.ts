@@ -18,7 +18,10 @@ export interface Material
     name: string;
     albedo: [number, number, number]; // vec3
     roughness: number;
+    usePerlinRoughness: boolean;
     metalness: number;
+    usePerlinMetalness: boolean;
+    perlinFreq: number;
 };
 
 //================================//
@@ -879,24 +882,36 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
             albedo: [0.73, 0.73, 0.73],
             roughness: 0.98,
             metalness: 0.0,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "whiteWall"
         },
         redWall: {
             albedo: [0.65, 0.05, 0.05],
             roughness: 0.98,
             metalness: 0.0,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "redWall"
         },
         greenWall: {
             albedo: [0.12, 0.45, 0.15],
             roughness: 0.98,
             metalness: 0.0,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "greenWall"
         },
         light: {
             albedo: [1.0, 1.0, 1.0],
             roughness: 0.0,
             metalness: 0.0,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "light"
         },
 
@@ -904,18 +919,27 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
             albedo: [0.12, 0.45, 0.15],
             roughness: 0.98,
             metalness: 0.0,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "sphereOne"
         },
         sphereTwo: sphereMaterials.find(mat => mat.name === "sphereTwo") || {
             albedo: [0.05, 0.05, 0.65],
             roughness: 0.5,
             metalness: 0.5,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "sphereTwo"
         },
         sphereThree: sphereMaterials.find(mat => mat.name === "sphereThree") || {
             albedo: [0.65, 0.05, 0.05],
             roughness: 0.01,
             metalness: 0.98,
+            usePerlinMetalness: false,
+            usePerlinRoughness: false,
+            perlinFreq: 2.0,
             name: "sphereThree"
         }
     };

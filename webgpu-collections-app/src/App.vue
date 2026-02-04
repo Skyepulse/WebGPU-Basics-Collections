@@ -29,7 +29,23 @@
         </div>
         <canvas id="webgpuCanvas" ref="webgpuCanvas" class="w-[90%] h-full"></canvas>
         <pre id="info" class="absolute top-0 right-0 p-4"></pre>
-        <pre id="utils" class="absolute bottom-0 right-0 p-1 bg-gray-700"></pre>
+        <div id="utils-wrapper" class="absolute bottom-0 right-0 flex flex-col items-end">
+            <!-- Toggle the utils -->
+             <button
+                @click="toggleUtils"
+                class="m-0 p-0 bg-white text-black flex items-center "
+            >
+                <!-- Show public expand.png at -90 degrees when not rendered, otherwise rotate 90 degrees -->
+                <img
+                    src="./assets/expand.png"
+                    :class="renderUtils ? 'rotate-90' : '-rotate-90'"
+                    class="w-6 h-6 transition-transform duration-200"
+                />
+                {{renderUtils ? 'Hide' : 'Show'}} Utils
+            </button>
+            <pre v-show="renderUtils" id="utils" class="p-1 bg-gray-700"></pre>
+        </div>
+        
 
         <!-- Animated slider (width grows left->right via scaleX) -->
         <div
@@ -44,12 +60,14 @@
 
 <script setup lang="ts">
     import { onMounted, ref, computed } from 'vue';
+    import { addUtilElementDefaults } from './helpers/Others';
+
     import { startup_1 } from './1-BasicStart/main';
     import { startup_2 } from './2-ComputeBasics/main';
     import { startup_3 } from './3-VariablesAndUniforms/main';
     import { startup_4 } from './4-StorageBufferInstancing/main';
     import { startup_5 } from './5-VertexAndIndexBuffers/main';
-    import { startup_6 } from './6-Textures/main';
+    import { startup_6 } from './6-Video/main';
     import { startup_7 } from './7-Game/main';
     import { startup_8 } from './8-RayTrace/main';
     import { startup_9 } from './9-Transparency/main';
@@ -61,12 +79,14 @@
 
     const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10];
     const numberOfExamples = startupFunctions.length;
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Textures', 'Game', 'Ray Trace', 'Transparency', 'PBR'];
-
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Video', 'Game', 'Ray Trace', 'Transparency', 'PBR'];
+    
     // Slider state
     const hoveredIndex = ref<number|null>(null);
     const hoveredButtonTop = ref(0);
     const hoveredButtonHeight = ref(0);
+
+    const renderUtils = ref<boolean>(true);
 
     async function selectExample(index: number) {
         if (isSwitching.value) return; // Prevent multiple clicks while switching
@@ -127,7 +147,14 @@
     });
 
     //================================//
+    function toggleUtils() 
+    {
+        renderUtils.value = !renderUtils.value;
+    }
+
+    //================================//
     onMounted(() => {
+        addUtilElementDefaults();
         selectExample(8);
     });
 </script>

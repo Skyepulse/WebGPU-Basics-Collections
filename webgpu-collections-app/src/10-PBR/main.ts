@@ -817,8 +817,8 @@ class RayTracer
         const numTexturesPerMaterial = 4;
         const numTexturedMaterials = 3;
 
-        const commonW = 1024;
-        const commonH = 1024;
+        const commonW = 256;
+        const commonH = 256;
 
         this.rayTracerObjects.textureArray = this.device.createTexture({
             label: 'Ray Tracer Material Texture Array',
@@ -830,7 +830,7 @@ class RayTracer
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT, 
         });
 
-        const placeHolderImage = createPlaceholderImage();
+        const placeHolderImage = createPlaceholderImage(256, 32);
         for (let matNum = 0; matNum < numTexturedMaterials; matNum++)
         {
             const albedoImage = this.spheresInfo?.sphereMaterials[matNum].albedoImage ? this.spheresInfo.sphereMaterials[matNum].albedoImage : placeHolderImage;
@@ -1362,7 +1362,7 @@ class RayTracer
             this.device!.queue.copyExternalImageToTexture(
                 { source: image },
                 { texture: this.rayTracerObjects.textureArray, origin: [0, 0, index * 4 + typeIndex] },
-                [1024, 1024]
+                [256, 256]
             );
         }
     }
@@ -1464,7 +1464,7 @@ class RayTracer
         promise.then(image => {
 
             // Resize
-            const resizedImage: HTMLImageElement = resizeImage(image, 1024, 1024);
+            const resizedImage: HTMLImageElement = resizeImage(image, 256, 256);
             const gpuTexture = createTextureFromImage(this.device!, resizedImage);
 
             switch (type)

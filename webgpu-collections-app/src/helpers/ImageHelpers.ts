@@ -80,7 +80,7 @@ export function resizeImage(image: HTMLImageElement, targetWidth: number, target
 /*
  * Create a simple placeholder texture for binding purposes
  */
-export function createPlaceholderTexture(device: GPUDevice, size: number = 1024, cells: number = 32): GPUTexture
+export function createPlaceholderTexture(device: GPUDevice, size: number = 256, cells: number = 32): GPUTexture
 {
     const canvas = document.createElement("canvas");
     canvas.width = size;
@@ -114,7 +114,7 @@ export function createPlaceholderTexture(device: GPUDevice, size: number = 1024,
 }
 
 //================================//
-export function createPlaceholderImage(size: number = 1024, cells: number = 32): HTMLCanvasElement
+export function createPlaceholderImage(size: number = 256, cells: number = 32): HTMLCanvasElement
 {
     const canvas = document.createElement("canvas");
     canvas.width = size;

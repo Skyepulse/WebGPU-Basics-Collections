@@ -194,7 +194,7 @@ fn rayTriangleIntersect(ray: Ray, triIndex: u32, hitCoord: ptr<function, vec3f>)
 }
 
 // ============================== //
-fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>) -> bool
+fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>, maxDist: f32, shadow: bool) -> bool
 {
     let numTriangles: u32 = u32(arrayLength(&indices)) / 3u;
 
@@ -207,6 +207,16 @@ fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>) -> bool
         if (rayTriangleIntersect(ray, i, &barycentricCoords))
         {
             let t = barycentricCoords.x;
+            if (t > maxDist)
+            {
+                continue;
+            }
+
+            if (shadow)
+            {
+                return true; // If we are just checking for shadow ray, we can return immediately on first hit
+            }
+
             if (t < closestT)
             {
                 closestT = t;
@@ -259,7 +269,7 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
     var albedo = material.albedo;
     if (material.useAlbedoTexture > 0.5 && material.textureIndex >= 0.0)
     {
-        albedo = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4, 0.0).rgb;
+        albedo = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4, 2.0).rgb;
     }
 
     var alphap = material.roughness;
@@ -270,7 +280,7 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
     }
     if (material.useRoughnessTexture > 0.5 && material.textureIndex >= 0.0)
     {
-        alphap = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 0.0).r;
+        alphap = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 2.0).r;
     }
     alphap = max(alphap, 0.001);
     
@@ -283,7 +293,7 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
     }
     if (material.useMetalnessTexture > 0.5 && material.textureIndex >= 0.0)
     {
-        metalness = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 1, 0.0).r;
+        metalness = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 1, 2.0).r;
     }
     
     let ka = 0.1;
@@ -329,7 +339,7 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
         shadowRay.direction = wi;
 
         var shadowHit: Hit;
-        let inShadow = rayTraceOnce(shadowRay, &shadowHit);
+        let inShadow = rayTraceOnce(shadowRay, &shadowHit, lightDistance, true);
     
         // If in shadow (and we find blocker)
         if (inShadow && shadowHit.distance < lightDistance)
@@ -411,7 +421,7 @@ fn computeLambertShading(hitPos: vec3f, normal: vec3f, baseColor: vec3f) -> vec3
         shadowRay.direction = wi;
 
         var shadowHit: Hit;
-        let inShadow = rayTraceOnce(shadowRay, &shadowHit);
+        let inShadow = rayTraceOnce(shadowRay, &shadowHit, lightDistance, true);
     
         // If in shadow (and we find blocker)
         if (inShadow && shadowHit.distance < lightDistance)
@@ -456,7 +466,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
 
     if (uniforms.mode == 0u)
     {
-        if (rayTraceOnce(ray, &hit))
+        if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
             let hitPos = getHitPosition(ray, hit.distance);
             let material = getMaterial(hit.triIndex);
@@ -470,7 +480,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     }
     else if (uniforms.mode == 1u)
     {
-        if (rayTraceOnce(ray, &hit))
+        if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
             let normal = hit.normalAtHit;
             color = normal * 0.5 + vec3f(0.5, 0.5, 0.5); // map from [-1,1] to [0,1]
@@ -482,7 +492,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     }
     else if (uniforms.mode == 2u)
     {
-        if (rayTraceOnce(ray, &hit))
+        if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
             let distance = hit.distance;
             let intensity = 1.0 - min(distance / maxDistance, 1.0);

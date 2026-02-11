@@ -1,11 +1,22 @@
 struct Material {
     albedo : vec3<f32>,
     metalness : f32,
+
     usePerlinMetalness : f32,
     roughness : f32,
     usePerlinRoughness : f32,
     perlinFreq : f32,
-}; // Total: 32 bytes
+
+    useAlbedoTexture : f32,
+    useMetalnessTexture : f32,
+    useRoughnessTexture : f32,
+    useNormalTexture : f32,
+
+    textureIndex: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+}; // Total: 64  bytes
 
 struct SpotLight
 {
@@ -43,8 +54,19 @@ struct VertexOutput {
 
 @group(0) @binding(0)
 var<uniform> uniforms : Uniforms;
+
 @group(1) @binding(0)
 var<uniform> material : Material;
+@group(1) @binding(1)
+var materialSampler: sampler;
+@group(1) @binding(2)
+var albedoTexture: texture_2d<f32>;
+@group(1) @binding(3)
+var metalnessTexture: texture_2d<f32>;
+@group(1) @binding(4)
+var roughnessTexture: texture_2d<f32>;
+@group(1) @binding(5)
+var normalTexture: texture_2d<f32>;
 
 // ============================== //
 @fragment
@@ -99,13 +121,21 @@ fn lambertShading(input: VertexOutput) -> vec3f
 fn microfacetBRDF(input: VertexOutput) -> vec3f
 {
     // Trowbridge-Reitz (GGX) normal distribution function
-    let albedo = material.albedo;
+    var albedo = material.albedo;
+    if (material.useAlbedoTexture > 0.5)
+    {
+        albedo = textureSample(albedoTexture, materialSampler, input.uv).rgb;
+    }
 
     var alphap = material.roughness;
     if (material.usePerlinRoughness > 0.5)
     {
         let perlinRoughness = fbmPerlin2D(input.uv * 5.0, material.perlinFreq, 0.5, 4, 2.0, 0.5);
         alphap = clamp(perlinRoughness * 0.5 + 0.5, 0.0, 1.0);
+    }
+    if (material.useRoughnessTexture > 0.5)
+    {
+        alphap = textureSample(roughnessTexture, materialSampler, input.uv).r;
     }
     alphap = max(alphap, 0.001);
 
@@ -116,9 +146,14 @@ fn microfacetBRDF(input: VertexOutput) -> vec3f
         let perlinMetalness = fbmPerlin2D(input.uv * 5.0 + vec2f(5.2, 1.3), material.perlinFreq, 0.5, 4, 2.0, 0.5);
         metalness = clamp(perlinMetalness * 0.5 + 0.5, 0.0, 1.0);
     }
+    if (material.useMetalnessTexture > 0.5)
+    {
+        metalness = textureSample(metalnessTexture, materialSampler, input.uv).r;
+    }
 
     let ka = 0.1;
     var n = normalize(input.normal);
+
     let pi = 3.14159265359;
 
     var totalColor = ka * albedo * (1.0 - metalness); // Prepare a small ambient term
@@ -153,6 +188,9 @@ fn microfacetBRDF(input: VertexOutput) -> vec3f
             continue;
         }
 
+        // Fade term (we fade as we approach the end of the cone
+        let fade = smoothstep(cos(uniforms.lights[i].coneAngle), cos(uniforms.lights[i].coneAngle) + 0.05, cosAngle);
+
         // Fresnel term (schlick's approximation)
         let F0 = mix(vec3(0.04), albedo, metalness);
         let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
@@ -185,7 +223,7 @@ fn microfacetBRDF(input: VertexOutput) -> vec3f
         let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
         let radiance = uniforms.lights[i].intensity * uniforms.lights[i].color * lightAttenuation;
 
-        totalColor = totalColor + f * radiance * NdotL;
+        totalColor = totalColor + f * radiance * NdotL * fade;
     }
 
     return totalColor;

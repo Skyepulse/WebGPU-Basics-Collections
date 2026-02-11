@@ -14,7 +14,9 @@ import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUut
 import { cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay, rayIntersectsSphere } from '@src/helpers/CameraHelpers';
 import { createCornellBox2, type Material, type PerMaterialTopologyInformation, type Transform } from '@src/helpers/GeometryUtils';
+import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
 
+const TESTURL = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_diffuse_1k.jpg';
 //================================//
 export async function startup_10(canvas: HTMLCanvasElement)
 {
@@ -26,9 +28,9 @@ export async function startup_10(canvas: HTMLCanvasElement)
 
 //================================//
 const normalUniformDataSize = (16 * 3) * 4 + 2 * 16 * 4 + (48 * 3); // Three matrices + three spotlights max + four floats + camera pos and padding
-const materialUniformDataSize = (32); // albedo + metalness + roughness + padding
+const materialUniformDataSize = (64); // albedo + metalness + roughness + padding
 const rayTracerUniformDataSize = 224 + 16*4; // = 224 bytes + four floats
-const materialFlattenedSize = 8; // three floats for albedo + metalness + roughness + 2 bools and one freq float
+const materialFlattenedSize = 16;
 
 //================================//
 interface normalObjects extends PipelineResources
@@ -47,6 +49,7 @@ interface normalObjects extends PipelineResources
     indexBuffers: GPUBuffer[];
 
     depthTexture: GPUTexture;
+    sampler: GPUSampler;
 };
 
 interface rayTracerObjects extends PipelineResources
@@ -62,6 +65,9 @@ interface rayTracerObjects extends PipelineResources
 
     materialBindGroupLayout: GPUBindGroupLayout;
     materialBindGroup: GPUBindGroup;
+
+    sampler: GPUSampler;
+    textureArray: GPUTexture;
 };
 
 enum RayTracingMode
@@ -374,6 +380,16 @@ class RayTracer
                 binding: 0,
                 visibility: GPUShaderStage.FRAGMENT,
                 buffer: { type: "read-only-storage" },
+            },
+            {
+                binding: 1,
+                visibility: GPUShaderStage.FRAGMENT,
+                sampler: { type: "filtering" },
+            },
+            {
+                binding: 2,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d-array", multisampled: false },
             }]
         });
 
@@ -417,6 +433,31 @@ class RayTracer
                 binding: 0,
                 visibility: GPUShaderStage.FRAGMENT,
                 buffer: { type: "uniform" },
+            },
+            {
+                binding: 1,
+                visibility: GPUShaderStage.FRAGMENT,
+                sampler: { type: "filtering" },
+            },
+            {
+                binding: 2,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d" },
+            },
+            {
+                binding: 3,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d" },
+            },
+            {
+                binding: 4,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d" },
+            },
+            {
+                binding: 5,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d" },
             }]
         });
 
@@ -501,6 +542,25 @@ class RayTracer
 
             this.timestampQuerySet = { querySet, resolveBuffer, resultBuffer };
         }
+
+        // Samplers
+        this.normalObjects.sampler = this.device.createSampler({
+            label: 'Normal Objects Sampler',
+            magFilter: "linear",
+            minFilter: "linear",
+            mipmapFilter: "linear",
+            addressModeU: "repeat",
+            addressModeV: "repeat",
+        });
+
+        this.rayTracerObjects.sampler = this.device.createSampler({
+            label: 'Ray Tracer Sampler',
+            magFilter: "linear",
+            minFilter: "linear",
+            mipmapFilter: "linear",
+            addressModeU: "repeat",
+            addressModeV: "repeat",
+        });
     }
 
     //================================//
@@ -509,6 +569,7 @@ class RayTracer
         if (this.device === null) return;
 
         // Normal Objects Buffers
+        const placeholderTexture = createPlaceholderTexture(this.device);
 
         // Cached sphere materials?
         const sphereMaterials = this.spheresInfo?.sphereMaterials || [];
@@ -540,6 +601,12 @@ class RayTracer
             float32View[5] = info.materials[matNum].roughness;
             float32View[6] = info.materials[matNum].usePerlinRoughness ? 1.0 : 0.0;
             float32View[7] = info.materials[matNum].perlinFreq;
+            float32View[8] = info.materials[matNum].useAlbedoTexture ? 1.0 : 0.0;
+            float32View[9] = info.materials[matNum].useMetalnessTexture ? 1.0 : 0.0;
+            float32View[10] = info.materials[matNum].useRoughnessTexture ? 1.0 : 0.0;
+            float32View[11] = info.materials[matNum].useNormalTexture ? 1.0 : 0.0;
+            float32View[12] = info.materials[matNum].textureIndex;
+
             this.device.queue.writeBuffer(this.normalObjects.materialUniforms[matNum], 0, materialData as BufferSource);
 
             this.normalObjects.materialBindGroups.push(this.device.createBindGroup({
@@ -548,6 +615,26 @@ class RayTracer
                 entries: [{
                     binding: 0,
                     resource: { buffer: this.normalObjects.materialUniforms[matNum] },
+                },
+                {
+                    binding: 1,
+                    resource: this.normalObjects.sampler,
+                },
+                {
+                    binding: 2,
+                    resource: info.materials[matNum].albedoGPUTexture ? info.materials[matNum].albedoGPUTexture!.createView() : placeholderTexture.createView(),
+                },
+                {
+                    binding: 3,
+                    resource: info.materials[matNum].metalnessGPUTexture ? info.materials[matNum].metalnessGPUTexture!.createView() : placeholderTexture.createView(),
+                },
+                {
+                    binding: 4,
+                    resource: info.materials[matNum].roughnessGPUTexture ? info.materials[matNum].roughnessGPUTexture!.createView() : placeholderTexture.createView(),
+                },
+                {
+                    binding: 5,
+                    resource: info.materials[matNum].normalGPUTexture ? info.materials[matNum].normalGPUTexture!.createView() : placeholderTexture.createView(),
                 }],
             }));
 
@@ -708,6 +795,14 @@ class RayTracer
             flattenedMaterials.push(mat.roughness);
             flattenedMaterials.push(mat.usePerlinRoughness ? 1.0 : 0.0);
             flattenedMaterials.push(mat.perlinFreq);
+            flattenedMaterials.push(mat.useAlbedoTexture ? 1.0 : 0.0);
+            flattenedMaterials.push(mat.useMetalnessTexture ? 1.0 : 0.0);
+            flattenedMaterials.push(mat.useRoughnessTexture ? 1.0 : 0.0);
+            flattenedMaterials.push(mat.useNormalTexture ? 1.0 : 0.0);
+            flattenedMaterials.push(mat.textureIndex);
+            flattenedMaterials.push(0.0);
+            flattenedMaterials.push(0.0);
+            flattenedMaterials.push(0.0);
         }
         const materialData = new Float32Array(flattenedMaterials);
 
@@ -718,12 +813,67 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.rayTracerObjects.materialBuffer, 0, materialData as BufferSource);
 
+        // Texture array creation
+        const numTexturesPerMaterial = 4;
+        const numTexturedMaterials = 3;
+
+        const commonW = 1024;
+        const commonH = 1024;
+
+        this.rayTracerObjects.textureArray = this.device.createTexture({
+            label: 'Ray Tracer Material Texture Array',
+            size: [commonW, commonH, numTexturesPerMaterial * numTexturedMaterials],
+            format: 'rgba8unorm',
+            mipLevelCount: 1,
+            sampleCount: 1,
+            dimension: '2d',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT, 
+        });
+
+        const placeHolderImage = createPlaceholderImage();
+        for (let matNum = 0; matNum < numTexturedMaterials; matNum++)
+        {
+            const albedoImage = this.spheresInfo?.sphereMaterials[matNum].albedoImage ? this.spheresInfo.sphereMaterials[matNum].albedoImage : placeHolderImage;
+            const metalnessImage = this.spheresInfo?.sphereMaterials[matNum].metalnessImage ? this.spheresInfo.sphereMaterials[matNum].metalnessImage : placeHolderImage;
+            const roughnessImage = this.spheresInfo?.sphereMaterials[matNum].roughnessImage ? this.spheresInfo.sphereMaterials[matNum].roughnessImage : placeHolderImage;
+            const normalImage = this.spheresInfo?.sphereMaterials[matNum].normalImage ? this.spheresInfo.sphereMaterials[matNum].normalImage : placeHolderImage;
+
+            this.device.queue.copyExternalImageToTexture(
+                { source: albedoImage },
+                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial] },
+                [commonW, commonH]
+            );
+            this.device.queue.copyExternalImageToTexture(
+                { source: metalnessImage },
+                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 1] },
+                [commonW, commonH]
+            );
+            this.device.queue.copyExternalImageToTexture(
+                { source: roughnessImage },
+                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 2] },
+                [commonW, commonH]
+            );
+            this.device.queue.copyExternalImageToTexture(
+                { source: normalImage },
+                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 3] },
+                [commonW, commonH]
+            );
+        }
+
         this.rayTracerObjects.materialBindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Material Bind Group',
             layout: this.rayTracerObjects.materialBindGroupLayout,
             entries: [{
                 binding: 0,
                 resource: { buffer: this.rayTracerObjects.materialBuffer },
+            },
+            {
+                binding: 1,
+                resource: this.rayTracerObjects.sampler,
+            },
+            {
+                binding: 2,
+                resource: this.rayTracerObjects.textureArray.createView(),
             }],
         });
     }
@@ -776,7 +926,6 @@ class RayTracer
         let sphereIndex = this.rayCastOnSpheres(e.clientX, e.clientY);
         if (sphereIndex !== -1)
         {
-            console.log("Clicked on sphere index: ", sphereIndex);
             this.spawnMaterialContextMenu(sphereIndex, e.clientX, e.clientY);
         }
     };
@@ -828,6 +977,23 @@ class RayTracer
         this.initializeBuffers();
         this.initializeUtils();
         this.initializeInputHandlers();
+
+        // Start fetching textures for materials
+
+        // ALBEDO
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[2], TextureType.Albedo, TESTURL);
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[1], TextureType.Albedo, 'textures/herringbone_brick_03_diff_1k.jpg');
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[0], TextureType.Albedo, 'textures/oak_veneer_01_diff_1k.jpg');
+
+        // METALNESS
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[2], TextureType.Metalness, 'textures/metalness.png');
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[1], TextureType.Metalness, 'textures/metalness.png');
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[0], TextureType.Metalness, 'textures/metalness.png');
+
+        // ROUGHNESS
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[2], TextureType.Roughness, 'textures/roughness.png');
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[1], TextureType.Roughness, 'textures/roughness.png');
+        this.fetchTextureForMaterial(this.spheresInfo?.sphereMaterials[0], TextureType.Roughness, 'textures/roughness.png');
 
         this.mainLoop();
     }
@@ -1126,6 +1292,11 @@ class RayTracer
         float32View[5] = newMaterial.roughness;
         float32View[6] = newMaterial.usePerlinRoughness ? 1.0 : 0.0;
         float32View[7] = newMaterial.perlinFreq;
+        float32View[8] = newMaterial.useAlbedoTexture ? 1.0 : 0.0;
+        float32View[9] = newMaterial.useMetalnessTexture ? 1.0 : 0.0;
+        float32View[10] = newMaterial.useRoughnessTexture ? 1.0 : 0.0;
+        float32View[11] = newMaterial.useNormalTexture ? 1.0 : 0.0;
+        float32View[12] = newMaterial.textureIndex;
         
         // Change it in normal pipeline, that is write on it's uniform buffer
         let buffer = this.normalObjects.materialUniforms[materialBufferIndex];
@@ -1134,6 +1305,66 @@ class RayTracer
         // Change it in the ray tracing pipeline. Carful, here the offset in the buffer is materialBufferIndex * materialFlattenedSize
         const offset = materialBufferIndex * materialFlattenedSize * 4; // in bytes
         this.device!.queue.writeBuffer(this.rayTracerObjects.materialBuffer, offset, materialData as BufferSource);
+    }
+
+    //================================//
+    recreateBindGroup(material: Material)
+    {
+        const matName: string = material.name;
+        const totalMaterialIndex = this.normalObjects.perMaterialTopologies.materials.findIndex(mat => mat.name === matName) || -1;
+        if (totalMaterialIndex === -1) return;
+
+        const newBindGroup = this.device!.createBindGroup({
+            label: 'Material Bind Group ' + totalMaterialIndex,
+            layout: this.normalObjects.materialUniformBindGroupLayout,
+            entries: [{
+                binding: 0,
+                resource: { buffer: this.normalObjects.materialUniforms[totalMaterialIndex] },
+            },
+            {
+                binding: 1,
+                resource: this.normalObjects.sampler,
+            },
+            {
+                binding: 2,
+                resource: material.albedoGPUTexture ? material.albedoGPUTexture.createView() : createPlaceholderTexture(this.device!).createView(),
+            },
+            {
+                binding: 3,
+                resource: material.metalnessGPUTexture ? material.metalnessGPUTexture.createView() : createPlaceholderTexture(this.device!).createView(),
+            },
+            {
+                binding: 4,
+                resource: material.roughnessGPUTexture ? material.roughnessGPUTexture.createView() : createPlaceholderTexture(this.device!).createView(),
+            },
+            {
+                binding: 5,
+                resource: material.normalGPUTexture ? material.normalGPUTexture.createView() : createPlaceholderTexture(this.device!).createView(),
+            }],
+        });
+
+        this.normalObjects.materialBindGroups[totalMaterialIndex] = newBindGroup;
+
+        // For the raytrace pipeline, write the texture into the array at the correct index
+        var index = material.textureIndex;
+        for (let typeIndex = 0; typeIndex < 4; typeIndex++)
+        {
+            const image = (() => {
+                switch (typeIndex)
+                {
+                    case 0: return material.albedoTexture;
+                    case 1: return material.metalnessTexture;
+                    case 2: return material.roughnessTexture;
+                    case 3: return material.normalTexture;
+                }
+            })() || createPlaceholderImage();
+
+            this.device!.queue.copyExternalImageToTexture(
+                { source: image },
+                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, index * 4 + typeIndex] },
+                [1024, 1024]
+            );
+        }
     }
 
     //================================//
@@ -1222,6 +1453,43 @@ class RayTracer
             this.activeContextMenu.remove();
             this.activeContextMenu = null;
         }
+    }
+
+    //================================//
+    fetchTextureForMaterial(material: Material, type: TextureType, url: string): void
+    {
+        if (!material) return;  
+
+        const promise: Promise<HTMLImageElement> = loadImageFromUrl(url);
+        promise.then(image => {
+
+            // Resize
+            const resizedImage: HTMLImageElement = resizeImage(image, 1024, 1024);
+            const gpuTexture = createTextureFromImage(this.device!, resizedImage);
+
+            switch (type)
+            {
+                case TextureType.Albedo:
+                    material.albedoTexture = resizedImage;
+                    material.albedoGPUTexture = gpuTexture;
+                    break;
+                case TextureType.Metalness:
+                    material.metalnessTexture = resizedImage;
+                    material.metalnessGPUTexture = gpuTexture;
+                    break;
+                case TextureType.Roughness:
+                    material.roughnessTexture = resizedImage;
+                    material.roughnessGPUTexture = gpuTexture;
+                    break;
+                case TextureType.Normal:
+                    material.normalTexture = resizedImage;
+                    material.normalGPUTexture = gpuTexture;
+                    break;
+            }
+            this.recreateBindGroup(material);
+        }).catch(error => {
+            console.error('Error loading texture with name:', url, 'and type:', TextureType[type], error);
+        });
     }
 
     //================================//

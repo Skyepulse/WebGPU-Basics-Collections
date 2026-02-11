@@ -116,6 +116,20 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
 
     menu.appendChild(albedoSection);
 
+    const useAlbedoTextureLabel = document.createElement('label');
+    useAlbedoTextureLabel.textContent = 'Albedo texture';
+    albedoSection.appendChild(useAlbedoTextureLabel);
+
+    const useAlbedoTextureCheckbox = document.createElement('input');
+    useAlbedoTextureCheckbox.type = 'checkbox';
+    useAlbedoTextureCheckbox.checked = currentMaterial.useAlbedoTexture;
+    useAlbedoTextureCheckbox.tabIndex = -1;
+    albedoSection.appendChild(useAlbedoTextureCheckbox);
+    useAlbedoTextureCheckbox.addEventListener('change', () => {
+        currentMaterial.useAlbedoTexture = useAlbedoTextureCheckbox.checked;
+        onApplyCallback(currentMaterial);
+    });
+
     // Metalness
     const metalnessSelection = document.createElement('div');
     metalnessSelection.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 12px;';
@@ -158,6 +172,20 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
         onApplyCallback(currentMaterial);
     });
 
+    const useMetalnessTextureLabel = document.createElement('label');
+    useMetalnessTextureLabel.textContent = 'Metalness texture';
+    metalnessSelection.appendChild(useMetalnessTextureLabel);
+
+    const useMetalnessTextureCheckbox = document.createElement('input');
+    useMetalnessTextureCheckbox.type = 'checkbox';
+    useMetalnessTextureCheckbox.checked = currentMaterial.useMetalnessTexture;
+    useMetalnessTextureCheckbox.tabIndex = -1;
+    metalnessSelection.appendChild(useMetalnessTextureCheckbox);
+    useMetalnessTextureCheckbox.addEventListener('change', () => {
+        currentMaterial.useMetalnessTexture = useMetalnessTextureCheckbox.checked;
+        onApplyCallback(currentMaterial);
+    });
+
     // Roughness
     const roughnessSelection = document.createElement('div');
     roughnessSelection.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 12px;';
@@ -197,6 +225,20 @@ export function createMaterialContextMenu(position: { x: number; y: number }, cu
     roughnessSelection.appendChild(usePerlinRoughnessCheckbox);
     usePerlinRoughnessCheckbox.addEventListener('change', () => {
         currentMaterial.usePerlinRoughness = usePerlinRoughnessCheckbox.checked;
+        onApplyCallback(currentMaterial);
+    });
+
+    const useRoughnessTextureLabel = document.createElement('label');
+    useRoughnessTextureLabel.textContent = 'Roughness texture';
+    roughnessSelection.appendChild(useRoughnessTextureLabel);
+
+    const useRoughnessTextureCheckbox = document.createElement('input');
+    useRoughnessTextureCheckbox.type = 'checkbox';
+    useRoughnessTextureCheckbox.checked = currentMaterial.useRoughnessTexture;
+    useRoughnessTextureCheckbox.tabIndex = -1;
+    roughnessSelection.appendChild(useRoughnessTextureCheckbox);
+    useRoughnessTextureCheckbox.addEventListener('change', () => {
+        currentMaterial.useRoughnessTexture = useRoughnessTextureCheckbox.checked;
         onApplyCallback(currentMaterial);
     });
 

@@ -27,14 +27,24 @@ struct Uniform
     lights: array<SpotLight, 3>, // 48 * 3 = 144 bytes
 }; // Total: 224 bytes
 
-struct Material
-{
-    albedo: vec3f,
-    metalness: f32,
+struct Material {
+    albedo : vec3<f32>,
+    metalness : f32,
+
     usePerlinMetalness : f32,
     roughness : f32,
     usePerlinRoughness : f32,
     perlinFreq : f32,
+
+    useAlbedoTexture : f32,
+    useMetalnessTexture : f32,
+    useRoughnessTexture : f32,
+    useNormalTexture : f32,
+
+    textureIndex: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 // MODE FOLLOWS:
@@ -75,6 +85,8 @@ struct VertexOutput
 @group(0) @binding(5) var<storage, read> materialIndices: array<u32>; // which material for each triangle
 
 @group(1) @binding(0) var<storage, read> materials: array<f32>;
+@group(1) @binding(1) var materialSampler: sampler;
+@group(1) @binding(2) var textures: texture_2d_array<f32>; // (albedo -> metalness -> roughness -> normal) for each material
 
 // Helper function to read a vec3 from the flat array
 // ============================== //
@@ -102,7 +114,7 @@ fn getUV(index: u32) -> vec2f
 fn getMaterial(TriIndex: u32) -> Material
 {
     let materialIndex = materialIndices[TriIndex]; // Which material are we talking about ?
-    let baseIndex = materialIndex * 8u;
+    let baseIndex = materialIndex * 16u;
 
     var mat: Material;
     mat.albedo = vec3f(
@@ -110,11 +122,20 @@ fn getMaterial(TriIndex: u32) -> Material
         materials[baseIndex + 1u],
         materials[baseIndex + 2u]
     );
+
     mat.metalness = materials[baseIndex + 3u];
     mat.usePerlinMetalness = materials[baseIndex + 4u];
     mat.roughness = materials[baseIndex + 5u];
     mat.usePerlinRoughness = materials[baseIndex + 6u];
     mat.perlinFreq = materials[baseIndex + 7u];
+
+    mat.useAlbedoTexture = materials[baseIndex + 8u];
+    mat.useMetalnessTexture = materials[baseIndex + 9u];
+    mat.useRoughnessTexture = materials[baseIndex + 10u];
+    mat.useNormalTexture = materials[baseIndex + 11u];
+
+    mat.textureIndex = materials[baseIndex + 12u];
+
     return mat;
 }
 
@@ -235,13 +256,21 @@ fn getHitPosition(ray: Ray, distance: f32) -> vec3f
 // ============================== //
 fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: vec2f) -> vec3f
 {
-    let albedo = material.albedo;
+    var albedo = material.albedo;
+    if (material.useAlbedoTexture > 0.5 && material.textureIndex >= 0.0)
+    {
+        albedo = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4, 0.0).rgb;
+    }
 
     var alphap = material.roughness;
     if (material.usePerlinRoughness > 0.5)
     {
         let perlinRoughness = fbmPerlin2D(uv * 5.0, material.perlinFreq, 0.5, 4, 2.0, 0.5);
         alphap = clamp(perlinRoughness * 0.5 + 0.5, 0.0, 1.0);
+    }
+    if (material.useRoughnessTexture > 0.5 && material.textureIndex >= 0.0)
+    {
+        alphap = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 0.0).r;
     }
     alphap = max(alphap, 0.001);
     
@@ -251,6 +280,10 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
         // Slight offset from UVS of perlin roughness to avoid correlation
         let perlinMetalness = fbmPerlin2D(uv * 5.0 + vec2f(5.2, 1.3), material.perlinFreq, 0.5, 4, 2.0, 0.5);
         metalness = clamp(perlinMetalness * 0.5 + 0.5, 0.0, 1.0);
+    }
+    if (material.useMetalnessTexture > 0.5 && material.textureIndex >= 0.0)
+    {
+        metalness = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 1, 0.0).r;
     }
     
     let ka = 0.1;
@@ -304,6 +337,9 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
             continue;
         }
 
+        let fade = smoothstep(cos(uniforms.lights[i].coneAngle), cos(uniforms.lights[i].coneAngle) + 0.05, cosAngle);
+
+
         // Fresnel term (schlick's approximation)
         let F0 = mix(vec3(0.04), albedo, metalness);
         let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
@@ -336,7 +372,7 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
         let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
         let radiance = uniforms.lights[i].intensity * uniforms.lights[i].color * lightAttenuation;
 
-        totalColor = totalColor + f * radiance * NdotL;
+        totalColor = totalColor + f * radiance * NdotL * fade;
     }
 
     return totalColor;

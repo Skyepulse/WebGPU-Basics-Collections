@@ -22,7 +22,56 @@ export interface Material
     metalness: number;
     usePerlinMetalness: boolean;
     perlinFreq: number;
+
+    albedoTexture?: HTMLImageElement;
+    useAlbedoTexture: boolean;
+    metalnessTexture?: HTMLImageElement;
+    useMetalnessTexture: boolean;
+    roughnessTexture?: HTMLImageElement;
+    useRoughnessTexture: boolean;
+    useNormalTexture: boolean;
+    normalTexture?: HTMLImageElement;
+
+    albedoGPUTexture?: GPUTexture;
+    metalnessGPUTexture?: GPUTexture;
+    roughnessGPUTexture?: GPUTexture;
+    normalGPUTexture?: GPUTexture;
+
+    textureIndex: number; // Possible textureArray index
 };
+
+function createDefaultMaterial( {
+    name = "default",
+    albedo = [1.0, 1.0, 1.0] as [number, number, number],
+    roughness = 0.98,
+    metalness = 0.0,
+    usePerlinRoughness = false,
+    usePerlinMetalness = false,
+    perlinFreq = 2.0,
+    useAlbedoTexture = false,
+    useMetalnessTexture = false,
+    useRoughnessTexture = false,
+    useNormalTexture = false,
+    textureIndex = -1
+} ): Material
+{
+    return {
+        name: name,
+        albedo: albedo,
+        roughness: roughness,
+        usePerlinRoughness: usePerlinRoughness,
+        metalness: metalness,
+        usePerlinMetalness: usePerlinMetalness,
+        perlinFreq: perlinFreq,
+
+        useAlbedoTexture: useAlbedoTexture,
+        useMetalnessTexture: useMetalnessTexture,
+        useRoughnessTexture: useRoughnessTexture,
+        useNormalTexture: useNormalTexture,
+
+        textureIndex: textureIndex
+    };
+}
 
 //================================//
 export interface Transform
@@ -878,70 +927,43 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
     // Materials
     const materials: { [key: string]: Material } = 
     {
-        whiteWall: {
+        whiteWall: createDefaultMaterial({
             albedo: [0.73, 0.73, 0.73],
-            roughness: 0.98,
-            metalness: 0.0,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
             name: "whiteWall"
-        },
-        redWall: {
+        }),
+        redWall: createDefaultMaterial({
             albedo: [0.65, 0.05, 0.05],
-            roughness: 0.98,
-            metalness: 0.0,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
             name: "redWall"
-        },
-        greenWall: {
+        }),
+        greenWall: createDefaultMaterial({
             albedo: [0.12, 0.45, 0.15],
-            roughness: 0.98,
-            metalness: 0.0,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
+
             name: "greenWall"
-        },
-        light: {
+        }),
+        light: createDefaultMaterial({
             albedo: [1.0, 1.0, 1.0],
             roughness: 0.0,
-            metalness: 0.0,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
             name: "light"
-        },
-
-        sphereOne: sphereMaterials.find(mat => mat.name === "sphereOne") || {
+        }),
+        sphereOne: sphereMaterials.find(mat => mat.name === "sphereOne") || createDefaultMaterial({
             albedo: [0.12, 0.45, 0.15],
-            roughness: 0.98,
-            metalness: 0.0,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
-            name: "sphereOne"
-        },
-        sphereTwo: sphereMaterials.find(mat => mat.name === "sphereTwo") || {
+            name: "sphereOne",
+            textureIndex: 0
+        }),
+        sphereTwo: sphereMaterials.find(mat => mat.name === "sphereTwo") || createDefaultMaterial({
             albedo: [0.05, 0.05, 0.65],
             roughness: 0.5,
             metalness: 0.5,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
-            name: "sphereTwo"
-        },
-        sphereThree: sphereMaterials.find(mat => mat.name === "sphereThree") || {
+            name: "sphereTwo",
+            textureIndex: 1
+        }),
+        sphereThree: sphereMaterials.find(mat => mat.name === "sphereThree") || createDefaultMaterial({
             albedo: [0.65, 0.05, 0.05],
             roughness: 0.01,
             metalness: 0.98,
-            usePerlinMetalness: false,
-            usePerlinRoughness: false,
-            perlinFreq: 2.0,
-            name: "sphereThree"
-        }
+            name: "sphereThree",
+            textureIndex: 2
+        })
     };
     const perMaterialTopologies: { [key: string]: SimpleTopologyBuilder } = {};
 

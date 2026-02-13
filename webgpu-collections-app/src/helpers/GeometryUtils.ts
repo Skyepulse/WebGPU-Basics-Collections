@@ -2,6 +2,7 @@ import { computeNormal, rotationMatrix3 } from "./MathUtils"
 import { type Material, createDefaultMaterial, flattenMaterial } from "./MaterialUtils";
 import * as glm from 'gl-matrix';
 import { BVH } from "./BVHHelpers";
+import { loadMesh } from "./IOHelpers";
 
 //================================//
 interface VertexInformation
@@ -137,7 +138,13 @@ export class Mesh
         const float32View = new Float32Array(data);
 
         for (let i = 0; i < this.vertices.length; ++i)
-            float32View.set(this.vertices[i].pos, i * 3);
+        {
+            // Transform vertex position based on transform (only translation)
+            const pos = this.vertices[i].pos;
+            const transformedPos = glm.vec3.create();
+            glm.vec3.add(transformedPos, pos, this.transform.translation);
+            float32View.set(transformedPos, i * 3);
+        }
 
         return float32View;
     }
@@ -149,7 +156,9 @@ export class Mesh
         const float32View = new Float32Array(data);
 
         for (let i = 0; i < this.vertices.length; ++i)
+        {
             float32View.set(this.vertices[i].normal, i * 3);
+        }
 
         return float32View;
     }
@@ -1190,15 +1199,9 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
 
     for (let i = 0; i < 3; ++i) 
     {
-        let dir = directions[i];
-        let sphereCenter: glm.vec3 = glm.vec3.fromValues(
-            middleCubeCenter[0] + dir[0] * distanceToCenter,
-            middleCubeCenter[1] + dir[1] * distanceToCenter,
-            middleCubeCenter[2] + dir[2] * distanceToCenter
-        );
         addSphere(
             Meshes[i + 4],
-            sphereCenter,
+            [0, 0, 0],
             sphereRadius,
             sphereResolution,
             sphereResolution
@@ -1245,6 +1248,131 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
                 Meshes[4].GetMaterial(), // sphereOne
                 Meshes[5].GetMaterial(), // sphereTwo
                 Meshes[6].GetMaterial()  // sphereThree
+            ]
+        }
+    };
+}
+
+//================================//
+export async function createCornellBox3(meshMaterials: Material[]): Promise<SceneInformation>
+{   
+    const Meshes: Mesh[] = [];
+
+    Meshes.push(new Mesh("white wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "whiteWall" })));
+    Meshes.push(new Mesh("red wall", createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall" })));
+    Meshes.push(new Mesh("green wall", createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall" })));
+    Meshes.push(new Mesh("light", createDefaultMaterial({ albedo: [1.0, 1.0, 1.0], roughness: 0.0, name: "light" })));
+    
+    const dragonMaterial = meshMaterials.find(mat => mat.name === "dragon") || createDefaultMaterial({
+        albedo: [0.12, 0.45, 0.15],
+        name: "dragon",
+        textureIndex: 0
+    });
+    
+    //================================//
+    function addQuad(
+        Mesh: Mesh,
+        v0: glm.vec3,
+        v1: glm.vec3,
+        v2: glm.vec3,
+        v3: glm.vec3,
+        flipNormal: boolean = false
+    ): void 
+    {
+        let normal = computeNormal(v0, v1, v2);
+        if (flipNormal)
+            normal = glm.vec3.fromValues(-normal[0], -normal[1], -normal[2]);
+        
+        const i0 = Mesh.addVertex({pos: v0, normal: normal, uv: glm.vec2.fromValues(0, 0)});
+        const i1 = Mesh.addVertex({pos: v1, normal: normal, uv: glm.vec2.fromValues(1, 0)});
+        const i2 = Mesh.addVertex({pos: v2, normal: normal, uv: glm.vec2.fromValues(1, 1)});
+        const i3 = Mesh.addVertex({pos: v3, normal: normal, uv: glm.vec2.fromValues(0, 1)});
+
+        Mesh.addTriangle([i0, i1, i2]);
+        Mesh.addTriangle([i0, i2, i3]);
+    }
+
+    // ============== FLOOR (white) ============== //
+    addQuad(
+        Meshes[0],
+        glm.vec3.fromValues(552.8, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        false,
+    );
+    
+    // ============== CEILING (white) ============== //
+    addQuad(
+        Meshes[0],
+        glm.vec3.fromValues(556.0, 548.8, 0.0),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 0.0),
+        false,
+    );
+    
+    // ============== LIGHT (slightly below ceiling) ============== //
+    const lightEpsilon = 1.0;
+    const lightY = 548.8 - lightEpsilon;
+    addQuad(
+        Meshes[3],
+        glm.vec3.fromValues(343.0, lightY, 227.0),
+        glm.vec3.fromValues(343.0, lightY, 332.0),
+        glm.vec3.fromValues(213.0, lightY, 332.0),
+        glm.vec3.fromValues(213.0, lightY, 227.0),
+        false,
+    );
+    
+    // ============== BACK WALL (white) ============== //
+    addQuad(
+        Meshes[0],
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        false,
+    );
+    
+    // ============== RIGHT WALL (green) ============== //
+    addQuad(
+        Meshes[2],
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 548.8, 0.0),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        false
+    );
+    
+    // ============== LEFT WALL (red) ============== //
+    addQuad(
+        Meshes[1],
+        glm.vec3.fromValues(552.8, 0.0, 0.0),
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 0.0),
+        false,
+    );
+
+    // Middle
+    let middleCubeCenter: [number, number, number] = [278.0, 224.4, 279.5];
+
+    const loadedDragonMesh: Mesh = await loadMesh('/meshes/dragon/scene.gltf');
+    loadedDragonMesh.Material = dragonMaterial;
+    loadedDragonMesh.TransformMesh({
+        translation: glm.vec3.fromValues(middleCubeCenter[0], middleCubeCenter[1], middleCubeCenter[2]),
+        rotation: glm.vec3.fromValues(0, 0, 0),
+        scale: glm.vec3.fromValues(50, 50, 50)
+    });
+    Meshes.push(loadedDragonMesh);
+
+    return {
+        meshes: Meshes,
+        additionalInfo: {
+            meshMaterialIndices: [4],
+            meshTransforms: [Meshes[4].GetTransform()],
+            meshMaterials: [
+                Meshes[4].GetMaterial(), // dragon
             ]
         }
     };

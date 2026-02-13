@@ -460,3 +460,36 @@ export function rayIntersectsSphere(rayOrigin: Float32Array, rayDir: Float32Arra
     
     return t0;
 }
+
+//================================//
+export function rayIntersectsAABB(rayOrigin: Float32Array, rayDir: Float32Array, boxMin: glm.vec3, boxMax: glm.vec3): number
+{
+    let tmin = (boxMin[0] - rayOrigin[0]) / rayDir[0];
+    let tmax = (boxMax[0] - rayOrigin[0]) / rayDir[0];
+
+    if (tmin > tmax) [tmin, tmax] = [tmax, tmin];
+
+    let tymin = (boxMin[1] - rayOrigin[1]) / rayDir[1];
+    let tymax = (boxMax[1] - rayOrigin[1]) / rayDir[1];
+
+    if (tymin > tymax) [tymin, tymax] = [tymax, tymin];
+
+    if ((tmin > tymax) || (tymin > tmax)) return -1;
+
+    if (tymin > tmin) tmin = tymin;
+    if (tymax < tmax) tmax = tymax;
+
+    let tzmin = (boxMin[2] - rayOrigin[2]) / rayDir[2];
+    let tzmax = (boxMax[2] - rayOrigin[2]) / rayDir[2];
+
+    if (tzmin > tzmax) [tzmin, tzmax] = [tzmax, tzmin];
+
+    if ((tmin > tzmax) || (tzmin > tmax)) return -1;
+
+    if (tzmin > tmin) tmin = tzmin;
+    if (tzmax < tmax) tmax = tzmax;
+
+    if (tmin < 0) return -1;
+
+    return tmin;
+}

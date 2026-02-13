@@ -51,12 +51,6 @@ interface normalObjects extends PipelineResources
 
     depthTexture: GPUTexture;
     sampler: GPUSampler;
-
-    bvhLineGeometryBuffer: GPUBuffer;
-    bvhLineCount: number;
-
-    bvhDrawPipelineLayout: GPUPipelineLayout;
-    bvhDrawPipeline: GPURenderPipeline;
 };
 
 interface rayTracerObjects extends PipelineResources
@@ -116,10 +110,6 @@ class RayTracer
 
     //================================//
     private activeContextMenu: HTMLDivElement | null = null;
-
-    //================================//
-    private showBVH: boolean = false;
-    private bvhDepth: number = Infinity;
 
     //================================//
     constructor () 
@@ -204,11 +194,6 @@ class RayTracer
         addSlider('Linear (al)', this.a_l, 0.0, 0.5, 0.001, utilElement, (value) => { this.a_l = value; });           
         utilElement.appendChild(document.createElement('br'));
         addSlider('Quadratic (aq)', this.a_q, 0.0, 0.1, 0.0001, utilElement, (value) => { this.a_q = value; });
-    
-        utilElement.appendChild(document.createElement('br'));
-        addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; });
-        utilElement.appendChild(document.createElement('br'));
-        addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
     }
 
     //================================//
@@ -383,11 +368,6 @@ class RayTracer
             bindGroupLayouts: [this.normalObjects.bindGroupLayout, this.normalObjects.materialUniformBindGroupLayout],
         });
 
-        this.normalObjects.bvhDrawPipelineLayout = this.device.createPipelineLayout({
-            label: 'BVH Draw Pipeline Layout',
-            bindGroupLayouts: [this.normalObjects.bindGroupLayout],
-        });
-
         this.normalObjects.depthTexture = this.device.createTexture({
             size: [this.canvas!.width, this.canvas!.height],
             format: "depth24plus",
@@ -439,38 +419,6 @@ class RayTracer
                     depthCompare: "less",    // Standard depth (Z) test
                 },
             });
-
-            this.normalObjects.bvhDrawPipeline = this.device.createRenderPipeline({
-                label: 'BVH Draw Pipeline',
-                layout: this.normalObjects.bvhDrawPipelineLayout,
-                vertex: {
-                    module: this.normalObjects.shaderModule.vertex,
-                    entryPoint: 'vsBVH',
-                    buffers: [
-                        {
-                            arrayStride: 3*4,
-                            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }]
-                        }
-                    ]
-                },
-                fragment: {
-                    module: this.normalObjects.shaderModule.fragment,
-                    entryPoint: 'fsBVH',
-                    targets: [
-                        {
-                            format: this.presentationFormat
-                        }
-                    ],
-                },
-                primitive: {
-                    topology: "line-list"
-                },
-                    depthStencil: {
-                    format: "depth24plus",   // Must match depth texture
-                    depthWriteEnabled: false,
-                    depthCompare: "less",
-                },
-            });
         }
 
         this.timestampQuerySet = CreateTimestampQuerySet(this.device, 2);
@@ -510,11 +458,6 @@ class RayTracer
         this.normalObjects.sceneInformation = info;
         this.spheresInfo = info.additionalInfo;
         const numMaterials = info.meshes.length; // One mat per mesh
-
-        for (let mesh of info.meshes)
-        {
-            mesh.ComputeBVH();
-        }
 
         this.normalObjects.materialUniforms = [];
         this.normalObjects.materialBindGroups = [];
@@ -610,14 +553,6 @@ class RayTracer
                 resource: { buffer: this.normalObjects.uniformBuffer },
             }],
         });
-
-        const lineData = this.getBVHGeometry(Infinity); // This way create buffer at max capacity
-        this.normalObjects.bvhLineGeometryBuffer = this.device.createBuffer({
-            label: 'BVH Line Geometry Buffer',
-            size: lineData.length * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-        });
-        this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffer, 0, lineData as BufferSource);
 
         // Ray Tracer Objects Buffers
         const flattenedPositions: number[] = [];
@@ -1063,15 +998,6 @@ class RayTracer
 
                     pass.drawIndexed(this.normalObjects.indexBuffers[matNum].size / 2, 1, 0, 0, 0);
                 }
-
-                // BVH Rendering
-                if (this.showBVH)
-                {
-                    pass.setPipeline(this.normalObjects.bvhDrawPipeline);
-                    pass.setBindGroup(0, this.normalObjects.bindGroup);
-                    pass.setVertexBuffer(0, this.normalObjects.bvhLineGeometryBuffer);
-                    pass.draw(this.normalObjects.bvhLineCount);   
-                }
             }
             pass.end();
 
@@ -1262,45 +1188,6 @@ class RayTracer
                 [256, 256]
             );
         }
-    }
-
-    //================================//
-    getBVHGeometry(desiredDepth: number): Float32Array
-    {
-        if (this.normalObjects.sceneInformation.meshes.length === 0) return new Float32Array();
-
-        this.normalObjects.bvhLineCount = 0;
-        const chunks: Float32Array[] = [];
-        let totalLength = 0;
-        for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
-        {
-            const { vertexData, count } = this.normalObjects.sceneInformation.meshes[matNum].BVH.generateWireframeGeometry(desiredDepth);
-            chunks.push(vertexData);
-            totalLength += vertexData.length;
-            this.normalObjects.bvhLineCount += count;
-        }
-        const result = new Float32Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks)
-        {
-            result.set(chunk, offset);
-            offset += chunk.length;
-        }
-        return result;
-    }
-
-    //================================//
-    rebuildBVHBuffer()
-    {
-        if (this.device === null) return;
-
-        const lineData = this.getBVHGeometry(this.bvhDepth);
-        this.normalObjects.bvhLineGeometryBuffer = this.device.createBuffer({
-            label: 'BVH Line Geometry Buffer',
-            size: lineData.length * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-        });
-        this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffer, 0, lineData as BufferSource);
     }
 
     //================================//

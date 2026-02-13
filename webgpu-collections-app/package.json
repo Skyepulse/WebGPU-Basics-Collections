@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@loaders.gl/core": "^4.3.4",
+    "@loaders.gl/gltf": "^4.3.4",
     "@tailwindcss/vite": "^4.1.11",
     "@types/node": "^24.2.0",
     "vue": "^3.5.18"

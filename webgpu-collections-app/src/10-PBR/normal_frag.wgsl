@@ -79,12 +79,6 @@
     }
 
     // ============================== //
-    @fragment
-    fn fsBVH(input: VertexOutput) -> @location(0) vec4f {
-        return vec4f(0.0, 1.0, 0.0, 1.0);
-    }
-
-    // ============================== //
     fn lambertShading(input: VertexOutput) -> vec3f
     {
         var albedo = material.albedo;

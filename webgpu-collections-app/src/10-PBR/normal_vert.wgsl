@@ -45,3 +45,13 @@ fn vs(input: VertexInput) -> VertexOutput {
     output.uv = input.uv;
     return output;
 }
+
+@vertex
+fn vsBVH(@location(0) position: vec3f) -> VertexOutput {
+    var output: VertexOutput;
+    output.pos = uniforms.projMat * uniforms.viewMat * uniforms.modelMat * vec4f(position, 1.0);
+    output.position = position;
+    output.normal = vec3f(0.0);
+    output.uv = vec2f(0.0);
+    return output;
+}

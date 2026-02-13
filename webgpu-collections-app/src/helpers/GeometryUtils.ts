@@ -1,5 +1,7 @@
 import { computeNormal, rotationMatrix3 } from "./MathUtils"
+import { type Material, createDefaultMaterial, flattenMaterial } from "./MaterialUtils";
 import * as glm from 'gl-matrix';
+import { BVH } from "./BVHHelpers";
 
 //================================//
 interface VertexInformation
@@ -10,67 +12,6 @@ interface VertexInformation
     r?: number,
     g?: number,
     b?: number
-}
-
-//================================//
-export interface Material
-{
-    name: string;
-    albedo: [number, number, number]; // vec3
-    roughness: number;
-    usePerlinRoughness: boolean;
-    metalness: number;
-    usePerlinMetalness: boolean;
-    perlinFreq: number;
-
-    albedoTexture?: HTMLImageElement;
-    useAlbedoTexture: boolean;
-    metalnessTexture?: HTMLImageElement;
-    useMetalnessTexture: boolean;
-    roughnessTexture?: HTMLImageElement;
-    useRoughnessTexture: boolean;
-    useNormalTexture: boolean;
-    normalTexture?: HTMLImageElement;
-
-    albedoGPUTexture?: GPUTexture;
-    metalnessGPUTexture?: GPUTexture;
-    roughnessGPUTexture?: GPUTexture;
-    normalGPUTexture?: GPUTexture;
-
-    textureIndex: number; // Possible textureArray index
-};
-
-function createDefaultMaterial( {
-    name = "default",
-    albedo = [1.0, 1.0, 1.0] as [number, number, number],
-    roughness = 0.98,
-    metalness = 0.0,
-    usePerlinRoughness = false,
-    usePerlinMetalness = false,
-    perlinFreq = 2.0,
-    useAlbedoTexture = false,
-    useMetalnessTexture = false,
-    useRoughnessTexture = false,
-    useNormalTexture = false,
-    textureIndex = -1
-} ): Material
-{
-    return {
-        name: name,
-        albedo: albedo,
-        roughness: roughness,
-        usePerlinRoughness: usePerlinRoughness,
-        metalness: metalness,
-        usePerlinMetalness: usePerlinMetalness,
-        perlinFreq: perlinFreq,
-
-        useAlbedoTexture: useAlbedoTexture,
-        useMetalnessTexture: useMetalnessTexture,
-        useRoughnessTexture: useRoughnessTexture,
-        useNormalTexture: useNormalTexture,
-
-        textureIndex: textureIndex
-    };
 }
 
 //================================//
@@ -98,30 +39,174 @@ export interface TopologyInformation
 }
 
 //================================//
-export interface SimpleTopology
+export interface Triangle
 {
-    vertexData: Float32Array,
-    normalData: Float32Array,
-    uvData: Float32Array,
-    indexData: Uint16Array,
-    numVertices: number
+    vA: vertex,
+    vB: vertex,
+    vC: vertex,
 }
 
 //================================//
-interface SimpleTopologyBuilder
+export interface vertex
 {
-    vertexData: number[],
-    normalData: number[],
-    uvData: number[],
-    indexData: number[],
-    numVertices: number
+    pos: glm.vec3,
+    normal: glm.vec3,
+    uv: glm.vec2
 }
 
 //================================//
-export interface PerMaterialTopologyInformation
+export class Mesh
 {
-    materials: Material[],
-    pmTopologies: SimpleTopology[], // per material topologies, for easier draw calls
+    public triangles: Triangle[];
+    public vertices: vertex[];
+    public indices: number[];
+
+    public Material: Material;
+
+    public name: string;
+    public transform: Transform;
+
+    public BVH: BVH;
+
+    //================================//
+    constructor(name: string, material: Material)
+    {
+        this.name = name;
+        this.Material = material;
+
+        this.triangles = [];
+        this.indices = [];
+        this.vertices = [];
+
+        this.BVH = new BVH();
+
+        this.transform = { translation: glm.vec3.create(), rotation: glm.vec3.create(), scale: glm.vec3.fromValues(1, 1, 1) };
+    }
+
+    //================================//
+    public TransformMesh(transform: Transform): void
+    {
+        this.transform = transform;
+    }
+
+    //================================//
+    public GetTransform(): Transform
+    {
+        return this.transform;
+    }
+
+    //================================//
+    public GetMaterial(): Material
+    {
+        return this.Material;
+    }
+
+    //================================//
+    public GetFlattenedMaterial(): Float32Array
+    {
+        return flattenMaterial(this.Material);
+    }
+
+    //================================//
+    public addVertex(vertex: vertex): number
+    {
+        this.vertices.push(vertex);
+        return this.vertices.length - 1;
+    }
+
+    //================================//
+    public addTriangle(indices: number[]): void
+    {
+        if (indices.length !== 3) return;
+
+        const tri: Triangle = 
+        {
+            vA: this.vertices[indices[0]],
+            vB: this.vertices[indices[1]],
+            vC: this.vertices[indices[2]]
+        }
+
+        this.triangles.push(tri);
+        this.indices.push(...indices);
+    }
+
+    //================================//
+    public getVertexData(): Float32Array
+    {
+        const data = Array(this.vertices.length * 3);
+        const float32View = new Float32Array(data);
+
+        for (let i = 0; i < this.vertices.length; ++i)
+            float32View.set(this.vertices[i].pos, i * 3);
+
+        return float32View;
+    }
+
+    //================================//
+    public getNormalData(): Float32Array
+    {
+        const data = Array(this.vertices.length * 3);
+        const float32View = new Float32Array(data);
+
+        for (let i = 0; i < this.vertices.length; ++i)
+            float32View.set(this.vertices[i].normal, i * 3);
+
+        return float32View;
+    }
+
+    //================================//
+    public getUVData(): Float32Array
+    {
+        const data = Array(this.vertices.length * 2);
+        const float32View = new Float32Array(data);
+
+        for (let i = 0; i < this.vertices.length; ++i)
+            float32View.set(this.vertices[i].uv, i * 2);
+
+        return float32View;
+    }
+
+    //================================//
+    public getIndexData16(): Uint16Array
+    {
+        return new Uint16Array(this.indices);
+    }
+
+    //================================//
+    public getIndexData32(): Uint32Array
+    {
+    return new Uint32Array(this.indices);
+    }
+
+    //================================//
+    public getNumVertices(): number
+    {
+        return this.vertices.length;
+    }
+
+    //================================//
+    public getNumTriangles(): number
+    {
+        return this.triangles.length;
+    }
+
+    //================================//
+    public getTriangles(): Triangle[]
+    {
+        return this.triangles;
+    }
+
+    //================================//
+    public ComputeBVH(): void
+    {
+        this.BVH.buildBVH(this);
+    }
+}
+
+//================================//
+export interface SceneInformation
+{
+    meshes: Mesh[],
 
     additionalInfo?: any
 }
@@ -411,13 +496,13 @@ export function createCornellBox(): TopologyInformation
     {
         let normal = computeNormal(v0, v1, v2);
         if (flipNormal) {
-            normal = [-normal[0], -normal[1], -normal[2]];
+            normal = glm.vec3.fromValues(-normal[0], -normal[1], -normal[2]);
         }
         
-        const i0 = addVertex(v0, normal, color, [0, 0], reflectance);
-        const i1 = addVertex(v1, normal, color, [1, 0], reflectance);
-        const i2 = addVertex(v2, normal, color, [1, 1], reflectance);
-        const i3 = addVertex(v3, normal, color, [0, 1], reflectance);
+        const i0 = addVertex(v0, [normal[0], normal[1], normal[2]], color, [0, 0], reflectance);
+        const i1 = addVertex(v1, [normal[0], normal[1], normal[2]], color, [1, 0], reflectance);
+        const i2 = addVertex(v2, [normal[0], normal[1], normal[2]], color, [1, 1], reflectance);
+        const i3 = addVertex(v3, [normal[0], normal[1], normal[2]], color, [0, 1], reflectance);
 
         indices.push(i0, i1, i2);
         indices.push(i0, i2, i3);
@@ -913,125 +998,82 @@ export function createSphere(
 }
 
 //================================//
-export function createCornellBox2(sphereMaterials: Material[], sphereResolution: number = 8): PerMaterialTopologyInformation
+export function createCornellBox2(sphereMaterials: Material[], sphereResolution: number = 8): SceneInformation
 {   
-    if (sphereMaterials.length > 0)
-    {
-        console.log(`Using custom sphere materials for Cornell Box: ${sphereMaterials.map(mat => mat.name).join(", ")}`);
-    } 
-    else
-    {
-        console.log(`Using default sphere materials for Cornell Box.`);
-    }
+    const Meshes: Mesh[] = [];
 
-    // Materials
-    const materials: { [key: string]: Material } = 
-    {
-        whiteWall: createDefaultMaterial({
-            albedo: [0.73, 0.73, 0.73],
-            name: "whiteWall"
-        }),
-        redWall: createDefaultMaterial({
-            albedo: [0.65, 0.05, 0.05],
-            name: "redWall"
-        }),
-        greenWall: createDefaultMaterial({
-            albedo: [0.12, 0.45, 0.15],
-
-            name: "greenWall"
-        }),
-        light: createDefaultMaterial({
-            albedo: [1.0, 1.0, 1.0],
-            roughness: 0.0,
-            name: "light"
-        }),
-        sphereOne: sphereMaterials.find(mat => mat.name === "sphereOne") || createDefaultMaterial({
-            albedo: [0.12, 0.45, 0.15],
-            name: "sphereOne",
-            textureIndex: 0
-        }),
-        sphereTwo: sphereMaterials.find(mat => mat.name === "sphereTwo") || createDefaultMaterial({
-            albedo: [0.05, 0.05, 0.65],
-            roughness: 0.5,
-            metalness: 0.5,
-            name: "sphereTwo",
-            textureIndex: 1
-        }),
-        sphereThree: sphereMaterials.find(mat => mat.name === "sphereThree") || createDefaultMaterial({
-            albedo: [0.65, 0.05, 0.05],
-            roughness: 0.01,
-            metalness: 0.98,
-            name: "sphereThree",
-            textureIndex: 2
-        })
-    };
-    const perMaterialTopologies: { [key: string]: SimpleTopologyBuilder } = {};
+    Meshes.push(new Mesh("white wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "whiteWall" })));
+    Meshes.push(new Mesh("red wall", createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall" })));
+    Meshes.push(new Mesh("green wall", createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall" })));
+    Meshes.push(new Mesh("light", createDefaultMaterial({ albedo: [1.0, 1.0, 1.0], roughness: 0.0, name: "light" })));
+    Meshes.push(new Mesh("sphereOne", 
+        sphereMaterials.find(mat => mat.name === "sphereOne") || createDefaultMaterial({
+        albedo: [0.12, 0.45, 0.15],
+        name: "sphereOne",
+        textureIndex: 0
+    })));
+    Meshes.push(new Mesh("sphereTwo",
+        sphereMaterials.find(mat => mat.name === "sphereTwo") || createDefaultMaterial({
+        albedo: [0.05, 0.05, 0.65],
+        roughness: 0.5,
+        metalness: 0.5,
+        name: "sphereTwo",
+        textureIndex: 1
+    })));
+    Meshes.push(new Mesh("sphereThree",
+        sphereMaterials.find(mat => mat.name === "sphereThree") || createDefaultMaterial({
+        albedo: [0.65, 0.05, 0.05],
+        roughness: 0.01,
+        metalness: 0.98,
+        name: "sphereThree",
+        textureIndex: 2
+    })));
 
     //================================//
     function addVertex(
-        position: [number, number, number],
-        normal: [number, number, number],
-        uv: [number, number],
-        MaterialName: string,
-    ): number 
+        mesh: Mesh,
+        position: glm.vec3,
+        normal: glm.vec3,
+        uv: glm.vec2,
+    ): void 
     {
-        // Init topology if first vertex for this material
-        if (!(MaterialName in perMaterialTopologies)) {
-            perMaterialTopologies[MaterialName] = {
-                vertexData: [],
-                normalData: [],
-                uvData: [],
-                indexData: [],
-                numVertices: 0
-            };
-        }
-
-        const topology: SimpleTopologyBuilder = perMaterialTopologies[MaterialName];
-
-        topology.vertexData.push(
-            position[0],
-            position[1],
-            position[2]
-        );
-        topology.normalData.push(normal[0], normal[1], normal[2]);
-        topology.uvData.push(uv[0], uv[1]);
-        return topology.numVertices++;
+        const vertex: vertex = {pos: position, normal: normal, uv: uv };
+        mesh.addVertex(vertex);
     }
     
     //================================//
     function addQuad(
-        v0: [number, number, number],
-        v1: [number, number, number],
-        v2: [number, number, number],
-        v3: [number, number, number],
-        flipNormal: boolean = false,
-        MaterialName: string,
+        Mesh: Mesh,
+        v0: glm.vec3,
+        v1: glm.vec3,
+        v2: glm.vec3,
+        v3: glm.vec3,
+        flipNormal: boolean = false
     ): void 
     {
         let normal = computeNormal(v0, v1, v2);
-        if (flipNormal) {
-            normal = [-normal[0], -normal[1], -normal[2]];
-        }
+        if (flipNormal)
+            normal = glm.vec3.fromValues(-normal[0], -normal[1], -normal[2]);
         
-        const i0 = addVertex(v0, normal, [0, 0], MaterialName);
-        const i1 = addVertex(v1, normal, [1, 0], MaterialName);
-        const i2 = addVertex(v2, normal, [1, 1], MaterialName);
-        const i3 = addVertex(v3, normal, [0, 1], MaterialName);
+        const i0 = Mesh.addVertex({pos: v0, normal: normal, uv: glm.vec2.fromValues(0, 0)});
+        const i1 = Mesh.addVertex({pos: v1, normal: normal, uv: glm.vec2.fromValues(1, 0)});
+        const i2 = Mesh.addVertex({pos: v2, normal: normal, uv: glm.vec2.fromValues(1, 1)});
+        const i3 = Mesh.addVertex({pos: v3, normal: normal, uv: glm.vec2.fromValues(0, 1)});
 
-        perMaterialTopologies[MaterialName].indexData.push(i0, i1, i2);
-        perMaterialTopologies[MaterialName].indexData.push(i0, i2, i3);
+        Mesh.addTriangle([i0, i1, i2]);
+        Mesh.addTriangle([i0, i2, i3]);
     }
 
     //================================//
     function addSphere(
-        center: [number, number, number],
+        Mesh: Mesh,
+        center: glm.vec3,
         radius: number,
         latitudeBands: number = 12,
-        longitudeBands: number = 12,
-        MaterialName: string,
+        longitudeBands: number = 12
     ): void 
     {
-        const startIndex = perMaterialTopologies[MaterialName]?.numVertices || 0;
+        const startIndex = Mesh.getNumVertices();
         for (let latNumber = 0; latNumber <= latitudeBands; latNumber++)
         {
             const theta = latNumber * Math.PI / latitudeBands;
@@ -1050,13 +1092,13 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
                 const u = 1 - (longNumber / longitudeBands);
                 const v = 1 - (latNumber / latitudeBands);
 
-                const vertexPosition: [number, number, number] = [
+                const vertexPosition: glm.vec3 = glm.vec3.fromValues(
                     center[0] + radius * x,
                     center[1] + radius * y,
                     center[2] + radius * z
-                ];
+                );
 
-                addVertex(vertexPosition, [x, y, z], [u, v], MaterialName);
+                addVertex(Mesh, vertexPosition, glm.vec3.fromValues(x, y, z), glm.vec2.fromValues(u, v));
             }
         }
 
@@ -1067,72 +1109,72 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
                 const first = startIndex + (latNumber * (longitudeBands + 1)) + longNumber;
                 const second = first + longitudeBands + 1;
 
-                perMaterialTopologies[MaterialName].indexData.push(first, first + 1, second); // tri 1
-                perMaterialTopologies[MaterialName].indexData.push(second, first + 1, second + 1); // tri 2
+                Mesh.addTriangle([first, first + 1, second]); // tri 1
+                Mesh.addTriangle([second, first + 1, second + 1]); // tri 2
             }
         }
     } 
 
     // ============== FLOOR (white) ============== //
     addQuad(
-        [552.8, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 559.2],
-        [549.6, 0.0, 559.2],
+        Meshes[0],
+        glm.vec3.fromValues(552.8, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
         false,
-        "whiteWall"
     );
     
     // ============== CEILING (white) ============== //
     addQuad(
-        [556.0, 548.8, 0.0],
-        [556.0, 548.8, 559.2],
-        [0.0, 548.8, 559.2],
-        [0.0, 548.8, 0.0],
+        Meshes[0],
+        glm.vec3.fromValues(556.0, 548.8, 0.0),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 0.0),
         false,
-        "whiteWall"
     );
     
     // ============== LIGHT (slightly below ceiling) ============== //
     const lightEpsilon = 1.0;
     const lightY = 548.8 - lightEpsilon;
     addQuad(
-        [343.0, lightY, 227.0],
-        [343.0, lightY, 332.0],
-        [213.0, lightY, 332.0],
-        [213.0, lightY, 227.0],
+        Meshes[3],
+        glm.vec3.fromValues(343.0, lightY, 227.0),
+        glm.vec3.fromValues(343.0, lightY, 332.0),
+        glm.vec3.fromValues(213.0, lightY, 332.0),
+        glm.vec3.fromValues(213.0, lightY, 227.0),
         false,
-        "light"
     );
     
     // ============== BACK WALL (white) ============== //
     addQuad(
-        [549.6, 0.0, 559.2],
-        [0.0, 0.0, 559.2],
-        [0.0, 548.8, 559.2],
-        [556.0, 548.8, 559.2],
+        Meshes[0],
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
         false,
-        "whiteWall"
     );
     
     // ============== RIGHT WALL (green) ============== //
     addQuad(
-        [0.0, 0.0, 559.2],
-        [0.0, 0.0, 0.0],
-        [0.0, 548.8, 0.0],
-        [0.0, 548.8, 559.2],
-        false,
-        "greenWall"
+        Meshes[2],
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 548.8, 0.0),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        false
     );
     
     // ============== LEFT WALL (red) ============== //
     addQuad(
-        [552.8, 0.0, 0.0],
-        [549.6, 0.0, 559.2],
-        [556.0, 548.8, 559.2],
-        [556.0, 548.8, 0.0],
+        Meshes[1],
+        glm.vec3.fromValues(552.8, 0.0, 0.0),
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 0.0),
         false,
-        "redWall"
     );
 
     // Middle
@@ -1149,89 +1191,60 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
     for (let i = 0; i < 3; ++i) 
     {
         let dir = directions[i];
-        let sphereCenter: [number, number, number] = [
+        let sphereCenter: glm.vec3 = glm.vec3.fromValues(
             middleCubeCenter[0] + dir[0] * distanceToCenter,
             middleCubeCenter[1] + dir[1] * distanceToCenter,
             middleCubeCenter[2] + dir[2] * distanceToCenter
-        ];
+        );
         addSphere(
+            Meshes[i + 4],
             sphereCenter,
             sphereRadius,
             sphereResolution,
-            sphereResolution,
-            i === 0 ? "sphereOne" : (i === 1 ? "sphereThree" : "sphereTwo")
+            sphereResolution
         );
     }
 
-    const finalTopologies: SimpleTopology[] = [];
-    const finalMaterials: Material[] = [];
-    const sphereIndices: number[] = [];
-    const sphereTransforms: Transform[] = [];
-    let indexOffset = 0;
-    for (const materialName in perMaterialTopologies)
+    Meshes[4].TransformMesh(
     {
-        if (materialName === "sphereOne")
-        {
-            sphereIndices.push(indexOffset);
-            sphereTransforms.push({
-                translation: glm.vec3.fromValues(
-                    middleCubeCenter[0] + directions[0][0] * distanceToCenter,
-                    middleCubeCenter[1] + directions[0][1] * distanceToCenter,
-                    middleCubeCenter[2] + directions[0][2] * distanceToCenter
-                ),
-                rotation: glm.vec3.fromValues(0, 0, 0),
-                scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
-            });
-        }
-        else if (materialName === "sphereThree")
-        {
-            sphereIndices.push(indexOffset);
-            sphereTransforms.push({
-                translation: glm.vec3.fromValues(
-                    middleCubeCenter[0] + directions[1][0] * distanceToCenter,
-                    middleCubeCenter[1] + directions[1][1] * distanceToCenter,
-                    middleCubeCenter[2] + directions[1][2] * distanceToCenter
-                ),
-                rotation: glm.vec3.fromValues(0, 0, 0),
-                scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
-            });
-        }
-        else if (materialName === "sphereTwo")
-        {
-            sphereIndices.push(indexOffset);
-            sphereTransforms.push({
-                translation: glm.vec3.fromValues(
-                    middleCubeCenter[0] + directions[2][0] * distanceToCenter,
-                    middleCubeCenter[1] + directions[2][1] * distanceToCenter,
-                    middleCubeCenter[2] + directions[2][2] * distanceToCenter
-                ),
-                rotation: glm.vec3.fromValues(0, 0, 0),
-                scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
-            });
-        }
-
-        const topoBuilder: SimpleTopologyBuilder = perMaterialTopologies[materialName];
-        finalTopologies.push({
-            vertexData: new Float32Array(topoBuilder.vertexData),
-            indexData: new Uint16Array(topoBuilder.indexData),
-            numVertices: topoBuilder.indexData.length,
-            normalData: new Float32Array(topoBuilder.normalData),
-            uvData: new Float32Array(topoBuilder.uvData),
-        });
-        finalMaterials.push(materials[materialName]);
-        indexOffset += 1;
-    }
+        translation: glm.vec3.fromValues(
+            middleCubeCenter[0] + directions[0][0] * distanceToCenter,
+            middleCubeCenter[1] + directions[0][1] * distanceToCenter,
+            middleCubeCenter[2] + directions[0][2] * distanceToCenter
+        ),
+        rotation: glm.vec3.fromValues(0, 0, 0),
+        scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
+    });
+    Meshes[5].TransformMesh(
+    {
+        translation: glm.vec3.fromValues(
+            middleCubeCenter[0] + directions[1][0] * distanceToCenter,
+            middleCubeCenter[1] + directions[1][1] * distanceToCenter,
+            middleCubeCenter[2] + directions[1][2] * distanceToCenter
+        ),
+        rotation: glm.vec3.fromValues(0, 0, 0),
+        scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
+    });
+    Meshes[6].TransformMesh(
+    {
+        translation: glm.vec3.fromValues(
+            middleCubeCenter[0] + directions[2][0] * distanceToCenter,
+            middleCubeCenter[1] + directions[2][1] * distanceToCenter,
+            middleCubeCenter[2] + directions[2][2] * distanceToCenter
+        ),
+        rotation: glm.vec3.fromValues(0, 0, 0),
+        scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
+    });
 
     return {
-        materials: finalMaterials,
-        pmTopologies: finalTopologies,
+        meshes: Meshes,
         additionalInfo: {
-            sphereMaterialIndices: sphereIndices,
-            sphereTransforms: sphereTransforms,
+            sphereMaterialIndices: [4, 5, 6],
+            sphereTransforms: [Meshes[4].GetTransform(), Meshes[5].GetTransform(), Meshes[6].GetTransform()],
             sphereMaterials: [
-                materials["sphereOne"],
-                materials["sphereThree"],
-                materials["sphereTwo"]
+                Meshes[4].GetMaterial(), // sphereOne
+                Meshes[5].GetMaterial(), // sphereTwo
+                Meshes[6].GetMaterial()  // sphereThree
             ]
         }
     };

@@ -34,6 +34,14 @@ export function loadImageFromUrl(url: string): Promise<HTMLImageElement>
  */
 export function createTextureFromImage(device: GPUDevice, image: HTMLImageElement, labelName: string = "texture"): GPUTexture
 {
+    // Check if the image is sane
+    if (image.width <= 0 || image.height <= 0)
+    {
+        // return placeholder texture
+        console.warn(`Image has invalid dimensions (${image.width}x${image.height}). Using placeholder texture instead.`);
+        return createPlaceholderTexture(device);
+    }
+    
     const texture: GPUTexture = device.createTexture({
         label: labelName,
         size: {

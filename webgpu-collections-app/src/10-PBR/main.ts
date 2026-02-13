@@ -9,14 +9,16 @@ import normalVertWgsl from './normal_vert.wgsl?raw';
 import normalFragWgsl from './normal_frag.wgsl?raw';
 
 //================================//
-import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
+import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
+import { addButton, addCheckbox, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay, rayIntersectsSphere } from '@src/helpers/CameraHelpers';
-import { createCornellBox2, type Material, type PerMaterialTopologyInformation, type Transform } from '@src/helpers/GeometryUtils';
+import { createCornellBox2, type SceneInformation, type Transform } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
+import { flattenMaterial, flattenMaterialArray, MATERIAL_SIZE, type Material } from '@src/helpers/MaterialUtils';
 
 const TESTURL = 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_diffuse_1k.jpg';
+
 //================================//
 export async function startup_10(canvas: HTMLCanvasElement)
 {
@@ -28,16 +30,15 @@ export async function startup_10(canvas: HTMLCanvasElement)
 
 //================================//
 const normalUniformDataSize = (16 * 3) * 4 + 2 * 16 * 4 + (48 * 3); // Three matrices + three spotlights max + four floats + camera pos and padding
-const materialUniformDataSize = (64); // albedo + metalness + roughness + padding
 const rayTracerUniformDataSize = 224 + 16*4; // = 224 bytes + four floats
-const materialFlattenedSize = 16;
 
 //================================//
 interface normalObjects extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
 
-    perMaterialTopologies: PerMaterialTopologyInformation;
+    sceneInformation: SceneInformation;
+    materials: Material[];
 
     materialUniforms: GPUBuffer[];  
     materialBindGroups: GPUBindGroup[];
@@ -50,6 +51,12 @@ interface normalObjects extends PipelineResources
 
     depthTexture: GPUTexture;
     sampler: GPUSampler;
+
+    bvhLineGeometryBuffer: GPUBuffer;
+    bvhLineCount: number;
+
+    bvhDrawPipelineLayout: GPUPipelineLayout;
+    bvhDrawPipeline: GPURenderPipeline;
 };
 
 interface rayTracerObjects extends PipelineResources
@@ -68,14 +75,6 @@ interface rayTracerObjects extends PipelineResources
 
     sampler: GPUSampler;
     textureArray: GPUTexture;
-};
-
-enum RayTracingMode
-{
-    NormalShading = 0,
-    Normals = 1,
-    Distance = 2,
-    rayDirections = 3,
 };
 
 //================================//
@@ -110,19 +109,17 @@ class RayTracer
 
     //================================//
     private useRaytracing: boolean = true;
-    private useRaytracingCheckBox: HTMLInputElement | null = null;
-
-    private rayTracingModeSelect: HTMLSelectElement | null = null;
-    private rayTracingMode: RayTracingMode = RayTracingMode.NormalShading;
-    
     private sphereResolution: number = 8;
-    private sphereResolutionSlider: HTMLInputElement | null = null;
 
     //================================//
     private spheresInfo: any;
 
     //================================//
     private activeContextMenu: HTMLDivElement | null = null;
+
+    //================================//
+    private showBVH: boolean = false;
+    private bvhDepth: number = Infinity;
 
     //================================//
     constructor () 
@@ -173,50 +170,14 @@ class RayTracer
         const utilElement = getUtilElement();
         if (!utilElement) return;
 
-        this.useRaytracingCheckBox = document.createElement('input');
-        this.useRaytracingCheckBox.type = 'checkbox';
-        this.useRaytracingCheckBox.checked = this.useRaytracing;
-        this.useRaytracingCheckBox.id = 'useRaytracingCheckbox';
-        this.useRaytracingCheckBox.tabIndex = -1;
-        this.useRaytracingCheckBox.addEventListener('change', () => {
-            this.useRaytracing = this.useRaytracingCheckBox!.checked;
-        });
-        const useRaytracingLabel = document.createElement('label');
-        useRaytracingLabel.htmlFor = 'useRaytracingCheckbox';
-        useRaytracingLabel.textContent = ' Use Raytracing';
-
-        utilElement.appendChild(this.useRaytracingCheckBox);
-        utilElement.appendChild(useRaytracingLabel);
-
-        // Resolution slider
-        this.sphereResolutionSlider = document.createElement('input');
-        this.sphereResolutionSlider.type = 'range';
-        this.sphereResolutionSlider.min = '8';
-        this.sphereResolutionSlider.max = '64';
-        this.sphereResolutionSlider.step = '1';
-        this.sphereResolutionSlider.value = this.sphereResolution.toString();
-        this.sphereResolutionSlider.tabIndex = -1;
-        this.sphereResolutionSlider.addEventListener('input', () => {
-            this.sphereResolution = parseInt(this.sphereResolutionSlider!.value);
-            this.startRendering();
-        });
-        const resolutionLabel = document.createElement('label');
-        resolutionLabel.htmlFor = 'sphereResolutionSlider';
-        resolutionLabel.textContent = ' Sphere Resolution';
+        addCheckbox('Use Ray Tracing', this.useRaytracing, utilElement, (value) => { this.useRaytracing = value; });
         utilElement.appendChild(document.createElement('br'));
-        utilElement.appendChild(this.sphereResolutionSlider);
-        utilElement.appendChild(resolutionLabel);
-
-        // Lights options
-        // Three buttons, that spawn a context menu to edit each light
+        addSlider('Sphere Resolution', this.sphereResolution, 8, 64, 1, utilElement, (value) => { this.sphereResolution = value; this.startRendering(); });
 
         this.lights.forEach((_, index) =>
         {
-            const lightButton = document.createElement('button');
-            lightButton.style.cssText = 'background-color: #444444; color: white; border: none; padding: 5px 10px; margin-top: 5px; cursor: pointer;';
-            lightButton.textContent = `Edit Light ${index + 1}`;
-            lightButton.tabIndex = -1;
-            lightButton.addEventListener('click', (e) => {
+            const callback = (e: MouseEvent) => 
+            {
                 e.preventDefault();
                 if (this.activeContextMenu) {
                     this.activeContextMenu.remove();
@@ -231,67 +192,23 @@ class RayTracer
                     () => { this.activeContextMenu?.remove(); this.activeContextMenu = null; }
                 );
                 document.body.appendChild(this.activeContextMenu);
-            });
+            };
             utilElement.appendChild(document.createElement('br'));
-            utilElement.appendChild(lightButton);
+            addButton(`Edit Light ${index + 1}`, utilElement, callback);
         });
 
         // ac, al, aq sliders
-        const acLabel = document.createElement('label');
-        acLabel.htmlFor = 'acSlider';
-        acLabel.textContent = `Constant (ac): ${this.a_c.toFixed(2)}`;
         utilElement.appendChild(document.createElement('br'));
-        utilElement.appendChild(acLabel);
-
-        const acSlider = document.createElement('input');
-        acSlider.type = 'range';
-        acSlider.min = '0.0';
-        acSlider.max = '2.0';
-        acSlider.step = '0.01';
-        acSlider.value = this.a_c.toString();
-        acSlider.tabIndex = -1;
-        acSlider.addEventListener('input', () => {
-            this.a_c = parseFloat(acSlider.value);
-            acLabel.textContent = `Constant (ac): ${this.a_c.toFixed(2)}`;
-        });
-        utilElement.appendChild(acSlider);
-
-        const alLabel = document.createElement('label');
-        alLabel.htmlFor = 'alSlider';
-        alLabel.textContent = `Linear (al): ${this.a_l.toFixed(3)}`;
+        addSlider('Constant (ac)', this.a_c, 0.0, 2.0, 0.01, utilElement, (value) => { this.a_c = value; });
         utilElement.appendChild(document.createElement('br'));
-        utilElement.appendChild(alLabel);
-
-        const alSlider = document.createElement('input');
-        alSlider.type = 'range';
-        alSlider.min = '0.0';
-        alSlider.max = '0.5';
-        alSlider.step = '0.001';
-        alSlider.value = this.a_l.toString();
-        alSlider.tabIndex = -1;
-        alSlider.addEventListener('input', () => {
-            this.a_l = parseFloat(alSlider.value);
-            alLabel.textContent = `Linear (al): ${this.a_l.toFixed(3)}`;
-        });
-        utilElement.appendChild(alSlider);
-
-        const aqLabel = document.createElement('label');
-        aqLabel.htmlFor = 'aqSlider';
-        aqLabel.textContent = `Quadratic (aq): ${this.a_q.toFixed(4)}`;
+        addSlider('Linear (al)', this.a_l, 0.0, 0.5, 0.001, utilElement, (value) => { this.a_l = value; });           
         utilElement.appendChild(document.createElement('br'));
-        utilElement.appendChild(aqLabel);
-        const aqSlider = document.createElement('input');
-        aqSlider.type = 'range';
-        aqSlider.min = '0.0';
-        aqSlider.max = '0.1';
-        aqSlider.step = '0.0001';
-        aqSlider.value = this.a_q.toString();
-        aqSlider.tabIndex = -1;
-        aqSlider.addEventListener('input', () => {  
-            this.a_q = parseFloat(aqSlider.value);
-            aqLabel.textContent = `Quadratic (aq): ${this.a_q.toFixed(4)}`; 
-        });
-        utilElement.appendChild(aqSlider);
+        addSlider('Quadratic (aq)', this.a_q, 0.0, 0.1, 0.0001, utilElement, (value) => { this.a_q = value; });
+    
+        utilElement.appendChild(document.createElement('br'));
+        addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; });
+        utilElement.appendChild(document.createElement('br'));
+        addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
     }
 
     //================================//
@@ -376,7 +293,7 @@ class RayTracer
         });
         this.rayTracerObjects.materialBindGroupLayout = this.device.createBindGroupLayout({
             label: 'Ray Trace Material Bind Group Layout',
-            entries: [{ // materials
+            entries: [{
                 binding: 0,
                 visibility: GPUShaderStage.FRAGMENT,
                 buffer: { type: "read-only-storage" },
@@ -466,6 +383,11 @@ class RayTracer
             bindGroupLayouts: [this.normalObjects.bindGroupLayout, this.normalObjects.materialUniformBindGroupLayout],
         });
 
+        this.normalObjects.bvhDrawPipelineLayout = this.device.createPipelineLayout({
+            label: 'BVH Draw Pipeline Layout',
+            bindGroupLayouts: [this.normalObjects.bindGroupLayout],
+        });
+
         this.normalObjects.depthTexture = this.device.createTexture({
             size: [this.canvas!.width, this.canvas!.height],
             format: "depth24plus",
@@ -517,31 +439,41 @@ class RayTracer
                     depthCompare: "less",    // Standard depth (Z) test
                 },
             });
+
+            this.normalObjects.bvhDrawPipeline = this.device.createRenderPipeline({
+                label: 'BVH Draw Pipeline',
+                layout: this.normalObjects.bvhDrawPipelineLayout,
+                vertex: {
+                    module: this.normalObjects.shaderModule.vertex,
+                    entryPoint: 'vsBVH',
+                    buffers: [
+                        {
+                            arrayStride: 3*4,
+                            attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }]
+                        }
+                    ]
+                },
+                fragment: {
+                    module: this.normalObjects.shaderModule.fragment,
+                    entryPoint: 'fsBVH',
+                    targets: [
+                        {
+                            format: this.presentationFormat
+                        }
+                    ],
+                },
+                primitive: {
+                    topology: "line-list"
+                },
+                    depthStencil: {
+                    format: "depth24plus",   // Must match depth texture
+                    depthWriteEnabled: false,
+                    depthCompare: "less",
+                },
+            });
         }
 
-        const timeStampQueryCount = 2;
-        if (this.device.features.has('timestamp-query')) {
-
-            const querySet = this.device.createQuerySet({
-                label: 'timestamp query set',
-                type: 'timestamp',
-                count: timeStampQueryCount
-            });
-
-            const resolveBuffer = this.device.createBuffer({
-                label: 'timestamp resolve buffer',
-                size: timeStampQueryCount * 8,
-                usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
-            });
-
-            const resultBuffer = this.device.createBuffer({
-                label: 'timestamp result buffer',
-                size: timeStampQueryCount * 8,
-                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-            });
-
-            this.timestampQuerySet = { querySet, resolveBuffer, resultBuffer };
-        }
+        this.timestampQuerySet = CreateTimestampQuerySet(this.device, 2);
 
         // Samplers
         this.normalObjects.sampler = this.device.createSampler({
@@ -574,10 +506,15 @@ class RayTracer
         // Cached sphere materials?
         const sphereMaterials = this.spheresInfo?.sphereMaterials || [];
 
-        const info: PerMaterialTopologyInformation = createCornellBox2(sphereMaterials, this.sphereResolution);
-        this.normalObjects.perMaterialTopologies = info;
+        const info: SceneInformation = createCornellBox2(sphereMaterials, this.sphereResolution);
+        this.normalObjects.sceneInformation = info;
         this.spheresInfo = info.additionalInfo;
-        const numMaterials = info.materials.length;
+        const numMaterials = info.meshes.length; // One mat per mesh
+
+        for (let mesh of info.meshes)
+        {
+            mesh.ComputeBVH();
+        }
 
         this.normalObjects.materialUniforms = [];
         this.normalObjects.materialBindGroups = [];
@@ -590,23 +527,11 @@ class RayTracer
         {
             this.normalObjects.materialUniforms.push(this.device.createBuffer({
                 label: 'Material Uniform Buffer ' + matNum,
-                size: materialUniformDataSize,
+                size: MATERIAL_SIZE * 4,
                 usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
             }));
-            const materialData = new ArrayBuffer(materialUniformDataSize);
-            const float32View = new Float32Array(materialData);
-            float32View.set(info.materials[matNum].albedo, 0);
-            float32View[3] = info.materials[matNum].metalness;
-            float32View[4] = info.materials[matNum].usePerlinMetalness ? 1.0 : 0.0;
-            float32View[5] = info.materials[matNum].roughness;
-            float32View[6] = info.materials[matNum].usePerlinRoughness ? 1.0 : 0.0;
-            float32View[7] = info.materials[matNum].perlinFreq;
-            float32View[8] = info.materials[matNum].useAlbedoTexture ? 1.0 : 0.0;
-            float32View[9] = info.materials[matNum].useMetalnessTexture ? 1.0 : 0.0;
-            float32View[10] = info.materials[matNum].useRoughnessTexture ? 1.0 : 0.0;
-            float32View[11] = info.materials[matNum].useNormalTexture ? 1.0 : 0.0;
-            float32View[12] = info.materials[matNum].textureIndex;
 
+            const materialData = info.meshes[matNum].GetFlattenedMaterial();
             this.device.queue.writeBuffer(this.normalObjects.materialUniforms[matNum], 0, materialData as BufferSource);
 
             this.normalObjects.materialBindGroups.push(this.device.createBindGroup({
@@ -622,49 +547,53 @@ class RayTracer
                 },
                 {
                     binding: 2,
-                    resource: info.materials[matNum].albedoGPUTexture ? info.materials[matNum].albedoGPUTexture!.createView() : placeholderTexture.createView(),
+                    resource: info.meshes[matNum].Material.albedoGPUTexture ? info.meshes[matNum].Material.albedoGPUTexture!.createView() : placeholderTexture.createView(),
                 },
                 {
                     binding: 3,
-                    resource: info.materials[matNum].metalnessGPUTexture ? info.materials[matNum].metalnessGPUTexture!.createView() : placeholderTexture.createView(),
+                    resource: info.meshes[matNum].Material.metalnessGPUTexture ? info.meshes[matNum].Material.metalnessGPUTexture!.createView() : placeholderTexture.createView(),
                 },
                 {
                     binding: 4,
-                    resource: info.materials[matNum].roughnessGPUTexture ? info.materials[matNum].roughnessGPUTexture!.createView() : placeholderTexture.createView(),
+                    resource: info.meshes[matNum].Material.roughnessGPUTexture ? info.meshes[matNum].Material.roughnessGPUTexture!.createView() : placeholderTexture.createView(),
                 },
                 {
                     binding: 5,
-                    resource: info.materials[matNum].normalGPUTexture ? info.materials[matNum].normalGPUTexture!.createView() : placeholderTexture.createView(),
+                    resource: info.meshes[matNum].Material.normalGPUTexture ? info.meshes[matNum].Material.normalGPUTexture!.createView() : placeholderTexture.createView(),
                 }],
             }));
 
+            const vertData = info.meshes[matNum].getVertexData();
             this.normalObjects.positionBuffers.push(this.device.createBuffer({
                 label: 'Normal Position Buffer ' + matNum,
-                size: info.pmTopologies[matNum].vertexData.byteLength,
+                size: vertData.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.positionBuffers[matNum], 0, info.pmTopologies[matNum].vertexData as BufferSource);
+            this.device.queue.writeBuffer(this.normalObjects.positionBuffers[matNum], 0, vertData as BufferSource);
 
+            const indexData = info.meshes[matNum].getIndexData16();
             this.normalObjects.indexBuffers.push(this.device.createBuffer({
                 label: 'Normal Index Buffer ' + matNum,
-                size: info.pmTopologies[matNum].indexData.byteLength,
+                size: indexData.byteLength,
                 usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.indexBuffers[matNum], 0, info.pmTopologies[matNum].indexData as BufferSource);
+            this.device.queue.writeBuffer(this.normalObjects.indexBuffers[matNum], 0, indexData as BufferSource);
 
+            const normalData = info.meshes[matNum].getNormalData();
             this.normalObjects.normalBuffers.push(this.device.createBuffer({
                 label: 'Normal Normal Buffer ' + matNum,
-                size: info.pmTopologies[matNum].normalData!.byteLength,
+                size: normalData.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.normalBuffers[matNum], 0, info.pmTopologies[matNum].normalData as BufferSource);
+            this.device.queue.writeBuffer(this.normalObjects.normalBuffers[matNum], 0, normalData as BufferSource);
 
+            const uvData = info.meshes[matNum].getUVData();
             this.normalObjects.uvBuffers.push(this.device.createBuffer({
                 label: 'Normal UV Buffer ' + matNum,
-                size: info.pmTopologies[matNum].uvData!.byteLength,
+                size: uvData.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.uvBuffers[matNum], 0, info.pmTopologies[matNum].uvData as BufferSource);
+            this.device.queue.writeBuffer(this.normalObjects.uvBuffers[matNum], 0, uvData as BufferSource);
         }
 
         this.normalObjects.uniformBuffer = this.device.createBuffer({
@@ -682,8 +611,15 @@ class RayTracer
             }],
         });
 
-        // Ray Tracer Objects Buffers
+        const lineData = this.getBVHGeometry(Infinity); // This way create buffer at max capacity
+        this.normalObjects.bvhLineGeometryBuffer = this.device.createBuffer({
+            label: 'BVH Line Geometry Buffer',
+            size: lineData.length * 4,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffer, 0, lineData as BufferSource);
 
+        // Ray Tracer Objects Buffers
         const flattenedPositions: number[] = [];
         const flattenedNormals: number[] = [];
         const flattenedUVs: number[] = [];
@@ -692,18 +628,18 @@ class RayTracer
         let indexOffset = 0;
         for (let matNum = 0; matNum < numMaterials; matNum++)
         {
-            let topo = info.pmTopologies[matNum];
-            flattenedPositions.push(...topo.vertexData);
-            flattenedNormals.push(...topo.normalData);
-            flattenedUVs.push(...topo.uvData);
+            let mesh = info.meshes[matNum];
+            flattenedPositions.push(...mesh.getVertexData());
+            flattenedNormals.push(...mesh.getNormalData());
+            flattenedUVs.push(...mesh.getUVData());
 
-            for (let index of topo.indexData)
+            for (let index of mesh.getIndexData32())
             {
                 flattenedIndices.push(index + indexOffset);
             }
-            indexOffset += topo.vertexData.length / 3;
+            indexOffset += mesh.getNumVertices();
             
-            for (let i = 0; i < topo.indexData.length / 3; i++)
+            for (let i = 0; i < mesh.getNumTriangles(); i++)
             {
                 flattenedMaterialIndices.push(matNum); // One material index per triangle
             }
@@ -786,26 +722,8 @@ class RayTracer
         });
 
         // material buffer for ray tracer
-        const flattenedMaterials: number[] = [];
-        for (let mat of this.normalObjects.perMaterialTopologies.materials)
-        {
-            flattenedMaterials.push(...mat.albedo);
-            flattenedMaterials.push(mat.metalness);
-            flattenedMaterials.push(mat.usePerlinMetalness ? 1.0 : 0.0);
-            flattenedMaterials.push(mat.roughness);
-            flattenedMaterials.push(mat.usePerlinRoughness ? 1.0 : 0.0);
-            flattenedMaterials.push(mat.perlinFreq);
-            flattenedMaterials.push(mat.useAlbedoTexture ? 1.0 : 0.0);
-            flattenedMaterials.push(mat.useMetalnessTexture ? 1.0 : 0.0);
-            flattenedMaterials.push(mat.useRoughnessTexture ? 1.0 : 0.0);
-            flattenedMaterials.push(mat.useNormalTexture ? 1.0 : 0.0);
-            flattenedMaterials.push(mat.textureIndex);
-            flattenedMaterials.push(0.0);
-            flattenedMaterials.push(0.0);
-            flattenedMaterials.push(0.0);
-        }
-        const materialData = new Float32Array(flattenedMaterials);
-
+        const materials = info.meshes.map(mesh => mesh.Material);
+        const materialData = flattenMaterialArray(materials);
         this.rayTracerObjects.materialBuffer = this.device.createBuffer({
             label: 'Ray Tracer Material Storage Buffer',
             size: materialData.byteLength,
@@ -914,6 +832,8 @@ class RayTracer
     private onMouseUp = (e: MouseEvent) => {
         this.isMouseDown = false;
 
+        if (e.target !== this.canvas) return;
+
         // Check if we clicked on the context menu first
         if (this.activeContextMenu !== null)
         {
@@ -1010,13 +930,12 @@ class RayTracer
             const uintView = new Uint32Array(data);
 
             floatView.set(computePixelToRayMatrix(this.camera), 0);
-            floatView.set(this.camera.position, 16); // vec3
-            // After matrix (16) and camera (3), we set mode at 19
-            uintView[19] =  this.rayTracingMode;
+            floatView.set(this.camera.position, 16);
+            uintView[19] =  0;
             floatView[20] = this.a_c;
             floatView[21] = this.a_l;
             floatView[22] = this.a_q;
-            floatView[23] = 0.0; // pad
+            floatView[23] = 0.0;
 
             // All lights
             for (let i = 0; i < 3; i++)
@@ -1074,12 +993,6 @@ class RayTracer
     }
 
     //================================//
-    animate()
-    {
-        // NONE FOR NOW
-    }
-
-    //================================//
     mainLoop()
     {
         if (this.device === null || this.canvas === null) return;
@@ -1099,7 +1012,6 @@ class RayTracer
             const startTime = performance.now();
 
             this.handleInput();
-            this.animate();
             this.updateUniforms();
 
             const textureView = this.context.getCurrentTexture().createView();
@@ -1141,8 +1053,7 @@ class RayTracer
             {
                 pass.setPipeline(this.normalObjects.pipeline);
                 pass.setBindGroup(0, this.normalObjects.bindGroup);
-
-                for (let matNum = 0; matNum < this.normalObjects.perMaterialTopologies.materials.length; matNum++)
+                for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
                 {
                     pass.setBindGroup(1, this.normalObjects.materialBindGroups[matNum]);
                     pass.setVertexBuffer(0, this.normalObjects.positionBuffers[matNum]);
@@ -1151,6 +1062,15 @@ class RayTracer
                     pass.setIndexBuffer(this.normalObjects.indexBuffers[matNum], 'uint16');
 
                     pass.drawIndexed(this.normalObjects.indexBuffers[matNum].size / 2, 1, 0, 0, 0);
+                }
+
+                // BVH Rendering
+                if (this.showBVH)
+                {
+                    pass.setPipeline(this.normalObjects.bvhDrawPipeline);
+                    pass.setBindGroup(0, this.normalObjects.bindGroup);
+                    pass.setVertexBuffer(0, this.normalObjects.bvhLineGeometryBuffer);
+                    pass.draw(this.normalObjects.bvhLineCount);   
                 }
             }
             pass.end();
@@ -1175,8 +1095,8 @@ class RayTracer
                 this.timestampQuerySet.resultBuffer.mapAsync(GPUMapMode.READ).then(() =>
                 {
                     const times = new BigUint64Array(this.timestampQuerySet!.resultBuffer.getMappedRange());
-                    gpuTime = Number(times[1] - times[0]); // nanoseconds
-                    this.timestampQuerySet!.resultBuffer.unmap(); // When finished reading the data.
+                    gpuTime = Number(times[1] - times[0]);
+                    this.timestampQuerySet!.resultBuffer.unmap();
                 });
             }
 
@@ -1242,28 +1162,18 @@ class RayTracer
     //================================//
     async smallCleanup()
     {
-        // Clean handlers
-        this.useRaytracingCheckBox?.removeEventListener('change', () => {
-            this.useRaytracing = this.useRaytracingCheckBox!.checked;
-        });
-        this.rayTracingModeSelect?.removeEventListener('change', () => {
-            this.rayTracingMode = parseInt(this.rayTracingModeSelect!.value) as RayTracingMode;
-        });
-        this.sphereResolutionSlider?.removeEventListener('input', () => {
-            this.sphereResolution = parseInt(this.sphereResolutionSlider!.value);
-            this.startRendering();
-        });
-
         // Clean rest of handlers
         this.removeInputHandlers();
 
         cleanUtilElement();
 
-        if (this.animationFrameId !== null) {
+        if (this.animationFrameId !== null) 
+        {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
-        if (this.resizeObserver && this.canvas) {
+        if (this.resizeObserver && this.canvas) 
+        {
             this.resizeObserver.unobserve(this.canvas);
             this.resizeObserver = null;
         }
@@ -1274,36 +1184,23 @@ class RayTracer
     {
         if (sphereIndex < 0 || sphereIndex >= (this.spheresInfo?.sphereMaterialIndices.length || 0)) return;
 
-        // mat name
         const matName: string = newMaterial.name;
-        const totalMaterialIndex = this.normalObjects.perMaterialTopologies.materials.findIndex(mat => mat.name === matName) || -1;
+        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName) || -1;
         if (totalMaterialIndex === -1) return;
 
         this.spheresInfo!.sphereMaterials[sphereIndex] = newMaterial;
-        this.normalObjects.perMaterialTopologies.materials[totalMaterialIndex] = newMaterial;
+        this.normalObjects.sceneInformation.meshes[totalMaterialIndex].Material = newMaterial;
 
         // Do not create a new buffer, just update existing one we know the offset in the buffer of the aforementioned material
         const materialBufferIndex = this.spheresInfo!.sphereMaterialIndices[sphereIndex];
-        const materialData = new ArrayBuffer(materialUniformDataSize);
-        const float32View = new Float32Array(materialData);
-        float32View.set(newMaterial.albedo, 0);
-        float32View[3] = newMaterial.metalness;
-        float32View[4] = newMaterial.usePerlinMetalness ? 1.0 : 0.0;
-        float32View[5] = newMaterial.roughness;
-        float32View[6] = newMaterial.usePerlinRoughness ? 1.0 : 0.0;
-        float32View[7] = newMaterial.perlinFreq;
-        float32View[8] = newMaterial.useAlbedoTexture ? 1.0 : 0.0;
-        float32View[9] = newMaterial.useMetalnessTexture ? 1.0 : 0.0;
-        float32View[10] = newMaterial.useRoughnessTexture ? 1.0 : 0.0;
-        float32View[11] = newMaterial.useNormalTexture ? 1.0 : 0.0;
-        float32View[12] = newMaterial.textureIndex;
+        const materialData = flattenMaterial(newMaterial);
         
-        // Change it in normal pipeline, that is write on it's uniform buffer
+        // NORMAL
         let buffer = this.normalObjects.materialUniforms[materialBufferIndex];
         this.device!.queue.writeBuffer(buffer, 0, materialData as BufferSource);
 
-        // Change it in the ray tracing pipeline. Carful, here the offset in the buffer is materialBufferIndex * materialFlattenedSize
-        const offset = materialBufferIndex * materialFlattenedSize * 4; // in bytes
+        // RAY TRACING
+        const offset = materialBufferIndex * MATERIAL_SIZE * 4;
         this.device!.queue.writeBuffer(this.rayTracerObjects.materialBuffer, offset, materialData as BufferSource);
     }
 
@@ -1311,7 +1208,7 @@ class RayTracer
     recreateBindGroup(material: Material)
     {
         const matName: string = material.name;
-        const totalMaterialIndex = this.normalObjects.perMaterialTopologies.materials.findIndex(mat => mat.name === matName) || -1;
+        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName) || -1;
         if (totalMaterialIndex === -1) return;
 
         const newBindGroup = this.device!.createBindGroup({
@@ -1365,6 +1262,45 @@ class RayTracer
                 [256, 256]
             );
         }
+    }
+
+    //================================//
+    getBVHGeometry(desiredDepth: number): Float32Array
+    {
+        if (this.normalObjects.sceneInformation.meshes.length === 0) return new Float32Array();
+
+        this.normalObjects.bvhLineCount = 0;
+        const chunks: Float32Array[] = [];
+        let totalLength = 0;
+        for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
+        {
+            const { vertexData, count } = this.normalObjects.sceneInformation.meshes[matNum].BVH.generateWireframeGeometry(desiredDepth);
+            chunks.push(vertexData);
+            totalLength += vertexData.length;
+            this.normalObjects.bvhLineCount += count;
+        }
+        const result = new Float32Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks)
+        {
+            result.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return result;
+    }
+
+    //================================//
+    rebuildBVHBuffer()
+    {
+        if (this.device === null) return;
+
+        const lineData = this.getBVHGeometry(this.bvhDepth);
+        this.normalObjects.bvhLineGeometryBuffer = this.device.createBuffer({
+            label: 'BVH Line Geometry Buffer',
+            size: lineData.length * 4,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffer, 0, lineData as BufferSource);
     }
 
     //================================//
@@ -1449,7 +1385,8 @@ class RayTracer
     //================================//
     removeContextMenu()
     {
-        if (this.activeContextMenu) {
+        if (this.activeContextMenu) 
+        {
             this.activeContextMenu.remove();
             this.activeContextMenu = null;
         }

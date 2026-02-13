@@ -1,4 +1,4 @@
-import { type Material } from "@src/helpers/GeometryUtils.ts";
+import { type Material } from "@src/helpers/MaterialUtils";
 import * as glm from "gl-matrix";
 import { degreesToRads, radsToDegrees } from "./MathUtils";
 
@@ -41,6 +41,78 @@ export function cleanUtilElement(): void
     //================================//
     // Add back the constants
     addUtilElementDefaults();
+}
+
+//================================//
+export function addCheckbox(label: string, checkValue: boolean, utilElement: HTMLElement, onChange: (value: boolean) => void): HTMLInputElement
+{
+    const labelElement = document.createElement('label');
+    labelElement.textContent = label;
+    labelElement.htmlFor = `checkbox-${label}`;
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = `checkbox-${label}`;
+    checkbox.checked = checkValue;
+    checkbox.tabIndex = -1;
+    checkbox.style.cssText = `
+        margin-left: 8px;
+        transform: scale(1.2);
+        cursor: pointer;
+    `;
+    checkbox.addEventListener('change', () => {
+        onChange(checkbox.checked);
+    });
+
+    utilElement.appendChild(labelElement);
+    utilElement.appendChild(checkbox);
+
+    return checkbox;
+}
+
+//================================//
+export function addSlider(label: string, value: number, min: number, max: number, step: number, utilElement: HTMLElement, onChange: (value: number) => void): HTMLInputElement
+{
+    const labelElement = document.createElement('label');
+    labelElement.textContent = `${label}: ${value.toFixed(2)}`;
+    labelElement.htmlFor = `slider-${label}`;
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.id = `slider-${label}`;
+    slider.min = min.toString();
+    slider.max = max.toString();
+    slider.step = step.toString();
+    slider.value = value.toString();
+    slider.style.cssText = `
+        width: 150px;
+        margin-left: 8px;
+        cursor: pointer;
+    `;
+    slider.addEventListener('input', () => {
+        const val = parseFloat(slider.value);
+        onChange(isNaN(val) ? 0 : val);
+        labelElement.textContent = `${label}: ${val.toFixed(2)}`;
+    });
+
+    utilElement.appendChild(labelElement);
+    utilElement.appendChild(slider);
+
+    return slider;
+}
+
+//================================//
+export function addButton(label: string, utilElement: HTMLElement, onClick: (e: MouseEvent) => void): HTMLButtonElement
+{
+    const button = document.createElement('button');
+    button.style.cssText = 'background-color: #444444; color: white; border: none; padding: 5px 10px; margin-top: 5px; cursor: pointer;';
+    button.textContent = label;
+    button.tabIndex = -1;
+    button.addEventListener('click', onClick);
+
+    utilElement.appendChild(button);
+
+    return button;
 }
 
 //================================//

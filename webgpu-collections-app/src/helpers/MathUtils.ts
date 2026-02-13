@@ -127,44 +127,18 @@ export function cross2(a: glm.vec2, b: glm.vec2): number
 {
   return a[0] * b[1] - a[1] * b[0];
 }
-
-  //================================//
-  function vec3Subtract(a: [number, number, number], b: [number, number, number]): [number, number, number] 
-  {
-      return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-  }
   
-  //================================//
-  function vec3Cross(a: [number, number, number], b: [number, number, number]): [number, number, number] 
-  {
-      return [
-          a[1] * b[2] - a[2] * b[1],
-          a[2] * b[0] - a[0] * b[2],
-          a[0] * b[1] - a[1] * b[0]
-      ];
-  }
-  
-  //================================//
-  function vec3Normalize(v: [number, number, number]): [number, number, number] 
-  {
-      const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-      if (len > 0.00001) {
-          return [v[0] / len, v[1] / len, v[2] / len];
-      }
-      return [0, 0, 0];
-  }
-  
-  //================================//
-  export function computeNormal(
-      v0: [number, number, number],
-      v1: [number, number, number],
-      v2: [number, number, number]
-  ): [number, number, number] 
-  {
-      const edge1 = vec3Subtract(v1, v0);
-      const edge2 = vec3Subtract(v2, v0);
-      return vec3Normalize(vec3Cross(edge1, edge2));
-  }
+//================================//
+export function computeNormal(
+    v0: glm.vec3,
+    v1: glm.vec3,
+    v2: glm.vec3
+): glm.vec3
+{
+    const edge1 = glm.vec3.subtract(glm.vec3.create(), v1, v0);
+    const edge2 = glm.vec3.subtract(glm.vec3.create(), v2, v0);
+    return glm.vec3.normalize(glm.vec3.create(), glm.vec3.cross(glm.vec3.create(), edge1, edge2));
+}
 
 //================================//
 export function radsToDegrees(rads: number): number

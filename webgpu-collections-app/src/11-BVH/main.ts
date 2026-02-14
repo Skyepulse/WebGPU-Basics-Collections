@@ -8,12 +8,15 @@ import rayTraceFragWGSL from './shader_frag.wgsl?raw';
 import normalVertWgsl from './normal_vert.wgsl?raw';
 import normalFragWgsl from './normal_frag.wgsl?raw';
 
+import bvhVertWGSL from './bvh_vert.wgsl?raw';
+import bvhFragWGSL from './bvh_frag.wgsl?raw';
+
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
-import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
+import type { PipelineResources, ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
 import { addButton, addCheckbox, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
-import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay, rayIntersectsAABB } from '@src/helpers/CameraHelpers';
-import { createCornellBox3, type SceneInformation, type Transform } from '@src/helpers/GeometryUtils';
+import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay } from '@src/helpers/CameraHelpers';
+import { createCornellBox3, type Ray, type SceneInformation } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
 import { flattenMaterial, flattenMaterialArray, MATERIAL_SIZE, type Material } from '@src/helpers/MaterialUtils';
 
@@ -27,13 +30,16 @@ export async function startup_11(canvas: HTMLCanvasElement)
 }
 
 //================================//
-const normalUniformDataSize = (16 * 3) * 4 + 2 * 16 * 4 + (48 * 3);
+const normalUniformDataSize = (16 * 2) * 4 + (2 * 4) * 4 + (48 * 3);
 const rayTracerUniformDataSize = 224 + 16*4;
 
 //================================//
 interface normalObjects extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
+
+    meshesModelMatrixBuffers: GPUBuffer[];
+    meshesNormalMatrixBuffers: GPUBuffer[];
 
     sceneInformation: SceneInformation;
     materials: Material[];
@@ -55,6 +61,7 @@ interface normalObjects extends PipelineResources
 
     bvhDrawPipelineLayout: GPUPipelineLayout;
     bvhDrawPipeline: GPURenderPipeline;
+    bvhShaderModule: ShaderModule | null; 
 };
 
 interface rayTracerObjects extends PipelineResources
@@ -233,6 +240,7 @@ class RayTracer
 
         this.rayTracerObjects.shaderModule = CreateShaderModule(this.device, rayTraceVertWGSL, rayTraceFragWGSL, 'Ray Trace Shader Module');
         this.normalObjects.shaderModule = CreateShaderModule(this.device, normalVertWgsl, normalFragWgsl, 'Normal Shader Module');
+        this.normalObjects.bvhShaderModule = CreateShaderModule(this.device, bvhVertWGSL, bvhFragWGSL, 'BVH Draw Shader Module');
     }
 
     //================================//
@@ -360,7 +368,17 @@ class RayTracer
                 binding: 5,
                 visibility: GPUShaderStage.FRAGMENT,
                 texture: { sampleType: "float", viewDimension: "2d" },
-            }]
+            },
+            {
+                binding: 6, // Model matrix
+                visibility: GPUShaderStage.VERTEX,
+                buffer: { type: "read-only-storage" },
+            },
+            {
+                binding: 7, // Normal matrix
+                visibility: GPUShaderStage.VERTEX,
+                buffer: { type: "read-only-storage" },
+            }],
         });
 
         this.normalObjects.pipelineLayout = this.device.createPipelineLayout({
@@ -429,7 +447,7 @@ class RayTracer
                 label: 'BVH Draw Pipeline',
                 layout: this.normalObjects.bvhDrawPipelineLayout,
                 vertex: {
-                    module: this.normalObjects.shaderModule.vertex,
+                    module: this.normalObjects.bvhShaderModule!.vertex,
                     entryPoint: 'vsBVH',
                     buffers: [
                         {
@@ -439,7 +457,7 @@ class RayTracer
                     ]
                 },
                 fragment: {
-                    module: this.normalObjects.shaderModule.fragment,
+                    module: this.normalObjects.bvhShaderModule!.fragment,
                     entryPoint: 'fsBVH',
                     targets: [
                         {
@@ -494,11 +512,6 @@ class RayTracer
         this.meshesInfo = info.additionalInfo;
 
         const numMaterials = info.meshes.length;
-        for (let mesh of info.meshes)
-        {
-            mesh.ComputeBVH();
-        }
-
         this.normalObjects.materialUniforms = [];
         this.normalObjects.materialBindGroups = [];
         this.normalObjects.positionBuffers = [];
@@ -506,8 +519,25 @@ class RayTracer
         this.normalObjects.uvBuffers = [];
         this.normalObjects.indexBuffers = [];
 
+        this.normalObjects.meshesModelMatrixBuffers = [];
+        this.normalObjects.meshesNormalMatrixBuffers = [];
+
         for (let matNum = 0; matNum < numMaterials; matNum++)
         {
+            this.normalObjects.meshesModelMatrixBuffers.push(this.device.createBuffer({
+                label: 'Mesh Model Matrix Buffer ' + matNum,
+                size: 16 * 4,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+            }));
+            this.device.queue.writeBuffer(this.normalObjects.meshesModelMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatWorldMatrix() as BufferSource);
+
+            this.normalObjects.meshesNormalMatrixBuffers.push(this.device.createBuffer({
+                label: 'Mesh Normal Matrix Buffer ' + matNum,
+                size: 16 * 4,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+            }));
+            this.device.queue.writeBuffer(this.normalObjects.meshesNormalMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatNormalMatrix() as BufferSource);
+
             this.normalObjects.materialUniforms.push(this.device.createBuffer({
                 label: 'Material Uniform Buffer ' + matNum,
                 size: MATERIAL_SIZE * 4,
@@ -543,6 +573,14 @@ class RayTracer
                 {
                     binding: 5,
                     resource: info.meshes[matNum].Material.normalGPUTexture ? info.meshes[matNum].Material.normalGPUTexture!.createView() : placeholderTexture.createView(),
+                },
+                {
+                    binding: 6,
+                    resource: { buffer: this.normalObjects.meshesModelMatrixBuffers[matNum] },
+                },
+                {
+                        binding: 7,
+                        resource: { buffer: this.normalObjects.meshesNormalMatrixBuffers[matNum] },
                 }],
             }));
 
@@ -929,14 +967,13 @@ class RayTracer
         {
             const data = new ArrayBuffer(normalUniformDataSize);
             const floatView = new Float32Array(data);
-            floatView.set(this.camera.modelMatrix, 0);
-            floatView.set(this.camera.viewMatrix, 16);
-            floatView.set(this.camera.projectionMatrix, 32);
-            floatView.set(this.camera.position, 48); // vec3 + pad
-            floatView[52] = this.a_c;
-            floatView[53] = this.a_l;
-            floatView[54] = this.a_q;
-            floatView[55] = 0.0; // pad
+            floatView.set(this.camera.viewMatrix, 0);
+            floatView.set(this.camera.projectionMatrix, 16);
+            floatView.set(this.camera.position, 32); // vec3 + pad
+            floatView[36] = this.a_c;
+            floatView[37] = this.a_l;
+            floatView[38] = this.a_q;
+            floatView[39] = 0.0; // pad
 
             for (let i = 0; i < 3; i++)
             {
@@ -944,7 +981,7 @@ class RayTracer
                     break;
 
                 const light = this.lights[i];
-                const baseIndex = 56 + i * 12;
+                const baseIndex = 40 + i * 12;
 
                 floatView.set(light.position, baseIndex);
                 floatView[baseIndex + 3] = light.intensity;
@@ -1150,7 +1187,7 @@ class RayTracer
     //================================//
     changeMeshMaterial(meshIndex: number, newMaterial: Material)
     {
-        if (meshIndex < 0 || meshIndex >= (this.meshesInfo?.meshMaterialIndices.length || 0)) return;
+        if (meshIndex < 0 || meshIndex >= (this.meshesInfo?.meshIndices.length || 0)) return;
 
         const matName: string = newMaterial.name;
         const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName) || -1;
@@ -1159,7 +1196,7 @@ class RayTracer
         this.meshesInfo!.meshMaterials[meshIndex] = newMaterial;
         this.normalObjects.sceneInformation.meshes[totalMaterialIndex].Material = newMaterial;
 
-        const materialBufferIndex = this.meshesInfo!.meshMaterialIndices[meshIndex];
+        const materialBufferIndex = this.meshesInfo!.meshIndices[meshIndex];
         const materialData = flattenMaterial(newMaterial);
         
         // NORMAL
@@ -1204,6 +1241,14 @@ class RayTracer
             {
                 binding: 5,
                 resource: material.normalGPUTexture ? material.normalGPUTexture.createView() : createPlaceholderTexture(this.device!).createView(),
+            },
+            {
+                    binding: 6,
+                    resource: { buffer: this.normalObjects.meshesModelMatrixBuffers[totalMaterialIndex] },
+            },
+            {
+                    binding: 7,
+                    resource: { buffer: this.normalObjects.meshesNormalMatrixBuffers[totalMaterialIndex] },
             }],
         });
 
@@ -1241,7 +1286,7 @@ class RayTracer
         let totalLength = 0;
         for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
         {
-            const { vertexData, count } = this.normalObjects.sceneInformation.meshes[matNum].BVH.generateWireframeGeometry(desiredDepth);
+            const { vertexData, count } = this.normalObjects.sceneInformation.meshes[matNum].GetBVHGeometry(desiredDepth);
             chunks.push(vertexData);
             totalLength += vertexData.length;
             this.normalObjects.bvhLineCount += count;
@@ -1275,7 +1320,8 @@ class RayTracer
     {
         if (this.canvas === null || this.camera === null || this.meshesInfo === null) return -1;
 
-        const transforms: Transform[] = this.meshesInfo.meshTransforms!;
+        const potentialMeshesIndices: number[] = this.meshesInfo!.meshIndices;
+        const potentialMeshes = potentialMeshesIndices.map(index => this.normalObjects.sceneInformation.meshes[index]);
 
         // Convert viewport coordinates to canvas-relative coordinates
         const rect = this.canvas.getBoundingClientRect();
@@ -1288,28 +1334,23 @@ class RayTracer
         const ndcX = (2 * canvasX * scaleX) / this.canvas.width - 1;
         const ndcY = 1 - (2 * canvasY * scaleY) / this.canvas.height;
 
-        const ray: Float32Array = cameraPointToRay(this.camera, ndcX, ndcY);
+        const ray: Ray = cameraPointToRay(this.camera, ndcX, ndcY);
 
         // Now check if the ray intersects any of the meshes,
         // we know their world position and radius
         let currentClosestMeshIndex = -1;
         let currentClosestDistance = Number.POSITIVE_INFINITY;
 
-        for (let i = 0; i < transforms.length; i++)
+        for (let i = 0; i < potentialMeshes.length; i++)
         {
-            const transform = transforms[i];
-            const center = transform.translation;
-            const scale = transform.scale;
+            const mesh = potentialMeshes[i];
+            const dist = mesh.intersectMeshWithRay(ray, this.bvhDepth);
 
-            const minBounds = [center[0] - scale[0], center[1] - scale[1], center[2] - scale[2]];
-            const maxBounds = [center[0] + scale[0], center[1] + scale[1], center[2] + scale[2]];
+            if (dist < 0) continue;
 
-            const distance = rayIntersectsAABB(this.camera.position, ray, minBounds, maxBounds);
-            if (distance <= 0) continue;
-
-            if (distance < currentClosestDistance)
+            if (dist < currentClosestDistance)
             {
-                currentClosestDistance = distance;
+                currentClosestDistance = dist;
                 currentClosestMeshIndex = i;
             }
         }

@@ -11,16 +11,27 @@ struct SpotLight
 }; // 48 bytes
 
 struct Uniforms {
-    modelMat : mat4x4<f32>,
     viewMat : mat4x4<f32>,
     projMat : mat4x4<f32>,
 
-    // Three light sources: 48 * 3 = 144 bytes
+    cameraPosition: vec3f,
+    _pad0: f32,
+
+    a_c: f32,
+    a_l: f32,
+    a_q: f32,
+    _pad2: f32,
+
     lights : array<SpotLight, 3>,
 };
 
 @group(0) @binding(0)
 var<uniform> uniforms : Uniforms;
+
+@group(1) @binding(6)
+var<storage, read> modelMatrix : mat4x4<f32>;
+@group(1) @binding(7)
+var<storage, read> normalMatrix : mat3x3<f32>;
 
 struct VertexInput {
     @location(0) pos: vec3f,
@@ -39,9 +50,11 @@ struct VertexOutput {
 @vertex
 fn vs(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.pos = uniforms.projMat * uniforms.viewMat * uniforms.modelMat * vec4f (input.pos, 1);
-    output.position = input.pos;
-    output.normal = input.normal;
+
+    let worldPos = modelMatrix * vec4f(input.pos, 1.0);
+    output.pos = uniforms.projMat * uniforms.viewMat * worldPos;
+    output.position = worldPos.xyz;
+    output.normal = normalize(normalMatrix * input.normal);
     output.uv = input.uv;
     return output;
 }

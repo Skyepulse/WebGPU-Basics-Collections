@@ -13,7 +13,7 @@ import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
 import { addButton, addCheckbox, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay, rayIntersectsSphere } from '@src/helpers/CameraHelpers';
-import { createCornellBox2, type SceneInformation, type Transform } from '@src/helpers/GeometryUtils';
+import { createCornellBox2, type Ray, type SceneInformation, type Transform } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
 import { flattenMaterial, flattenMaterialArray, MATERIAL_SIZE, type Material } from '@src/helpers/MaterialUtils';
 
@@ -29,13 +29,16 @@ export async function startup_10(canvas: HTMLCanvasElement)
 }
 
 //================================//
-const normalUniformDataSize = (16 * 3) * 4 + 2 * 16 * 4 + (48 * 3); // Three matrices + three spotlights max + four floats + camera pos and padding
+const normalUniformDataSize = (16 * 2) * 4 + (2 * 4) * 4 + (48 * 3);
 const rayTracerUniformDataSize = 224 + 16*4; // = 224 bytes + four floats
 
 //================================//
 interface normalObjects extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
+
+    meshesModelMatrixBuffers: GPUBuffer[];
+    meshesNormalMatrixBuffers: GPUBuffer[];
 
     sceneInformation: SceneInformation;
     materials: Material[];
@@ -360,7 +363,17 @@ class RayTracer
                 binding: 5,
                 visibility: GPUShaderStage.FRAGMENT,
                 texture: { sampleType: "float", viewDimension: "2d" },
-            }]
+            },
+            {
+                binding: 6, // Model matrix
+                visibility: GPUShaderStage.VERTEX,
+                buffer: { type: "read-only-storage" },
+            },
+            {
+                binding: 7, // Normal matrix
+                visibility: GPUShaderStage.VERTEX,
+                buffer: { type: "read-only-storage" },
+            }],
         });
 
         this.normalObjects.pipelineLayout = this.device.createPipelineLayout({
@@ -466,8 +479,25 @@ class RayTracer
         this.normalObjects.uvBuffers = [];
         this.normalObjects.indexBuffers = [];
 
+        this.normalObjects.meshesModelMatrixBuffers = [];
+        this.normalObjects.meshesNormalMatrixBuffers = [];
+
         for (let matNum = 0; matNum < numMaterials; matNum++)
         {
+            this.normalObjects.meshesModelMatrixBuffers.push(this.device.createBuffer({
+                label: 'Mesh Model Matrix Buffer ' + matNum,
+                size: 16 * 4,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+            }));
+            this.device.queue.writeBuffer(this.normalObjects.meshesModelMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatWorldMatrix() as BufferSource);
+
+            this.normalObjects.meshesNormalMatrixBuffers.push(this.device.createBuffer({
+                label: 'Mesh Normal Matrix Buffer ' + matNum,
+                size: 16 * 4,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+            }));
+            this.device.queue.writeBuffer(this.normalObjects.meshesNormalMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatNormalMatrix() as BufferSource);
+
             this.normalObjects.materialUniforms.push(this.device.createBuffer({
                 label: 'Material Uniform Buffer ' + matNum,
                 size: MATERIAL_SIZE * 4,
@@ -503,7 +533,16 @@ class RayTracer
                 {
                     binding: 5,
                     resource: info.meshes[matNum].Material.normalGPUTexture ? info.meshes[matNum].Material.normalGPUTexture!.createView() : placeholderTexture.createView(),
-                }],
+                },
+                {
+                    binding: 6,
+                    resource: { buffer: this.normalObjects.meshesModelMatrixBuffers[matNum] },
+                },
+                {
+                    binding: 7,
+                    resource: { buffer: this.normalObjects.meshesNormalMatrixBuffers[matNum] },
+                }
+            ],
             }));
 
             const vertData = info.meshes[matNum].getVertexData();
@@ -564,8 +603,8 @@ class RayTracer
         for (let matNum = 0; matNum < numMaterials; matNum++)
         {
             let mesh = info.meshes[matNum];
-            flattenedPositions.push(...mesh.getVertexData());
-            flattenedNormals.push(...mesh.getNormalData());
+            flattenedPositions.push(...mesh.getTransformedVertexData());
+            flattenedNormals.push(...mesh.getTransformedNormalData());
             flattenedUVs.push(...mesh.getUVData());
 
             for (let index of mesh.getIndexData32())
@@ -897,14 +936,13 @@ class RayTracer
         {
             const data = new ArrayBuffer(normalUniformDataSize);
             const floatView = new Float32Array(data);
-            floatView.set(this.camera.modelMatrix, 0);
-            floatView.set(this.camera.viewMatrix, 16);
-            floatView.set(this.camera.projectionMatrix, 32);
-            floatView.set(this.camera.position, 48); // vec3 + pad
-            floatView[52] = this.a_c;
-            floatView[53] = this.a_l;
-            floatView[54] = this.a_q;
-            floatView[55] = 0.0; // pad
+            floatView.set(this.camera.viewMatrix, 0);
+            floatView.set(this.camera.projectionMatrix, 16);
+            floatView.set(this.camera.position, 32); // vec3 + pad
+            floatView[36] = this.a_c;
+            floatView[37] = this.a_l;
+            floatView[38] = this.a_q;
+            floatView[39] = 0.0; // pad
 
             for (let i = 0; i < 3; i++)
             {
@@ -912,7 +950,7 @@ class RayTracer
                     break;
 
                 const light = this.lights[i];
-                const baseIndex = 56 + i * 12;
+                const baseIndex = 40 + i * 12;
 
                 floatView.set(light.position, baseIndex);
                 floatView[baseIndex + 3] = light.intensity;
@@ -1163,6 +1201,14 @@ class RayTracer
             {
                 binding: 5,
                 resource: material.normalGPUTexture ? material.normalGPUTexture.createView() : createPlaceholderTexture(this.device!).createView(),
+            },
+            {
+                binding: 6,
+                resource: { buffer: this.normalObjects.meshesModelMatrixBuffers[totalMaterialIndex] },
+            },
+            {
+                binding: 7,
+                resource: { buffer: this.normalObjects.meshesNormalMatrixBuffers[totalMaterialIndex] },
             }],
         });
 
@@ -1209,7 +1255,7 @@ class RayTracer
         const ndcX = (2 * canvasX * scaleX) / this.canvas.width - 1;
         const ndcY = 1 - (2 * canvasY * scaleY) / this.canvas.height;
 
-        const ray: Float32Array = cameraPointToRay(this.camera, ndcX, ndcY);
+        const ray: Ray = cameraPointToRay(this.camera, ndcX, ndcY);
 
         // Now check if the ray intersects any of the spheres,
         // we know their world position and radius
@@ -1222,7 +1268,7 @@ class RayTracer
             const sphereCenter = transform.translation;
             const sphereRadius = transform.scale[0]; // uniform scale anyways...
 
-            const distance = rayIntersectsSphere(this.camera.position, ray, sphereCenter, sphereRadius);
+            const distance = rayIntersectsSphere(ray, sphereCenter, sphereRadius);
             if (distance <= 0) continue;
 
             if (distance < currentClosestDistance)

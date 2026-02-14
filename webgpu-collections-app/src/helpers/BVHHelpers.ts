@@ -1,4 +1,6 @@
-import type { Mesh, Triangle } from "./GeometryUtils";
+import { rayIntersectsAABB } from "./CameraHelpers";
+import type { Mesh, Ray, Triangle } from "./GeometryUtils";
+import * as glm from "gl-matrix";
 
 const floatMax = Number.MAX_VALUE;
 const floatMin = -Number.MAX_VALUE;
@@ -328,31 +330,46 @@ export class BVH
     }
 
     //================================//
-    public generateWireframeGeometry(maxDepth: number = Infinity): { vertexData: Float32Array, count: number }
+    public generateWireframeGeometry(worldMatrix: Float32Array | glm.mat4, maxDepth: number = Infinity): { vertexData: Float32Array, count: number }
     {
         const lines: number[] = [];
+        const hasTransform = worldMatrix !== undefined;
 
-        const addEdge = (ax: number, ay: number, az: number, bx: number, by: number, bz: number) => 
+        const transformPoint = (x: number, y: number, z: number): [number, number, number] =>
         {
-            lines.push(ax, ay, az, bx, by, bz);
+            if (!hasTransform) return [x, y, z];
+            const m = worldMatrix!;
+            return [
+                m[0]*x + m[4]*y + m[8]*z  + m[12],
+                m[1]*x + m[5]*y + m[9]*z  + m[13],
+                m[2]*x + m[6]*y + m[10]*z + m[14],
+            ];
+        }
+
+        const addEdge = (a: [number,number,number], b: [number,number,number]) => 
+        {
+            lines.push(a[0], a[1], a[2], b[0], b[1], b[2]);
         };
 
         const addBox = (min: [number, number, number], max: [number, number, number]) =>
         {
-            addEdge(min[0], min[1], min[2], max[0], min[1], min[2]);
-            addEdge(min[0], max[1], min[2], max[0], max[1], min[2]);
-            addEdge(min[0], min[1], max[2], max[0], min[1], max[2]);
-            addEdge(min[0], max[1], max[2], max[0], max[1], max[2]);
+            const c000 = transformPoint(min[0], min[1], min[2]);
+            const c100 = transformPoint(max[0], min[1], min[2]);
+            const c010 = transformPoint(min[0], max[1], min[2]);
+            const c110 = transformPoint(max[0], max[1], min[2]);
+            const c001 = transformPoint(min[0], min[1], max[2]);
+            const c101 = transformPoint(max[0], min[1], max[2]);
+            const c011 = transformPoint(min[0], max[1], max[2]);
+            const c111 = transformPoint(max[0], max[1], max[2]);
 
-            addEdge(min[0], min[1], min[2], min[0], max[1], min[2]);
-            addEdge(max[0], min[1], min[2], max[0], max[1], min[2]);
-            addEdge(min[0], min[1], max[2], min[0], max[1], max[2]);
-            addEdge(max[0], min[1], max[2], max[0], max[1], max[2]);
+            addEdge(c000, c100); addEdge(c100, c110);
+            addEdge(c110, c010); addEdge(c010, c000);
 
-            addEdge(min[0], min[1], min[2], min[0], min[1], max[2]);
-            addEdge(max[0], min[1], min[2], max[0], min[1], max[2]);
-            addEdge(min[0], max[1], min[2], min[0], max[1], max[2]);
-            addEdge(max[0], max[1], min[2], max[0], max[1], max[2]);
+            addEdge(c001, c101); addEdge(c101, c111);
+            addEdge(c111, c011); addEdge(c011, c001);
+
+            addEdge(c000, c001); addEdge(c100, c101);
+            addEdge(c010, c011); addEdge(c110, c111);
         };
 
         const stack: {index: number, depth: number}[] = [{index: 0, depth: 0}]; // At least root
@@ -383,5 +400,54 @@ export class BVH
 
         const vertexData = new Float32Array(lines);
         return { vertexData, count: vertexData.length / 3 };
+    }
+
+    //================================//
+    public traverse(ray: Ray, maxDepth: number = Infinity): number
+    {
+        let closestDistance = Number.MAX_VALUE;
+
+        // test root:
+        const rootNode = this.Nodes[0];
+        const distRoot = rayIntersectsAABB(ray, rootNode.minBounds, rootNode.maxBounds);
+        if (distRoot < 0) return -1;
+
+        const stack: {index: number, depth: number, dist: number}[] = [{index: 0, depth: 0, dist: distRoot}];
+        while (stack.length > 0)
+        {
+            const { index, depth, dist } = stack.pop()!;
+            const node = this.Nodes[index];
+
+            if (node.triangleCount === -1)
+            {
+                if (depth < maxDepth)
+                {
+                    const leftIndex = node.startIndex;
+                    const rightIndex = node.startIndex + 1;
+
+                    const distLeft = rayIntersectsAABB(ray, this.Nodes[leftIndex].minBounds, this.Nodes[leftIndex].maxBounds);
+                    const distRight = rayIntersectsAABB(ray, this.Nodes[rightIndex].minBounds, this.Nodes[rightIndex].maxBounds);
+
+                    if (distLeft < distRight)
+                    {
+                        if (distRight >= 0) stack.push({index: rightIndex, depth: depth + 1, dist: distRight});
+                        if (distLeft >= 0)  stack.push({index: leftIndex, depth: depth + 1, dist: distLeft});
+                    }
+                    else
+                    {
+                        if (distLeft >= 0)  stack.push({index: leftIndex, depth: depth + 1, dist: distLeft});
+                        if (distRight >= 0) stack.push({index: rightIndex, depth: depth + 1, dist: distRight});
+                    }
+                }
+                else
+                {
+                    if (dist < closestDistance)
+                    {
+                        closestDistance = dist;
+                    }
+                }
+            }
+        }
+        return closestDistance;
     }
 }

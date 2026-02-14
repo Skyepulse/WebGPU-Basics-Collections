@@ -28,11 +28,6 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms : Uniforms;
 
-@group(1) @binding(6)
-var<storage, read> modelMatrix : mat4x4<f32>;
-@group(1) @binding(7)
-var<storage, read> normalMatrix : mat3x3<f32>;
-
 struct VertexInput {
     @location(0) pos: vec3f,
     @location(1) normal: vec3f,
@@ -48,13 +43,12 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs(input: VertexInput) -> VertexOutput {
+fn vsBVH(@location(0) position: vec3f) -> VertexOutput {
     var output: VertexOutput;
-
-    let worldPos = modelMatrix * vec4f(input.pos, 1.0);
+    let worldPos = vec4f(position, 1.0);
     output.pos = uniforms.projMat * uniforms.viewMat * worldPos;
     output.position = worldPos.xyz;
-    output.normal = normalize(normalMatrix * input.normal);
-    output.uv = input.uv;
+    output.normal = vec3f(0.0);
+    output.uv = vec2f(0.0);
     return output;
 }

@@ -1,4 +1,5 @@
 import * as glm from 'gl-matrix';
+import type { Ray } from './GeometryUtils';
 
 //================================//
 interface Camera
@@ -20,7 +21,6 @@ interface Camera
     moveSpeed: number;
     rotateSpeed: number;
 
-    modelMatrix: Float32Array;
     viewMatrix: Float32Array;
     projectionMatrix: Float32Array;
 }
@@ -46,7 +46,6 @@ export function createCamera(aspect: number): Camera
         moveSpeed: 0.01,
         rotateSpeed: 0.5,
 
-        modelMatrix: mat4Identity(),
         viewMatrix: mat4Identity(),
         projectionMatrix: mat4Perspective(Math.PI / 4, aspect, 0.1, 1000),
     };
@@ -421,32 +420,40 @@ export function validatePixelToRayMatrix(camera: Camera): boolean
 //================================//
 // Knowing camera parameters, and NDC coordinates which can be screen coordinates, 
 // return direction ray in world space
-export function cameraPointToRay(camera: Camera, ndcX: number, ndcY: number): Float32Array
+export function cameraPointToRay(camera: Camera, ndcX: number, ndcY: number): Ray
 {
     const M = computePixelToRayMatrix(camera);
     
     // NDC to ray direction in world space
-    const rayDir = new Float32Array([
+    const rayDir = glm.vec3.fromValues(
         M[0] * ndcX + M[4] * ndcY + M[8] * 1.0,
         M[1] * ndcX + M[5] * ndcY + M[9] * 1.0,
         M[2] * ndcX + M[6] * ndcY + M[10] * 1.0,
-    ]);
-    vec3Normalize(rayDir);
-    return rayDir;
+    );
+    glm.vec3.normalize(rayDir, rayDir);
+    return {
+        origin: camera.position,
+        direction: rayDir,
+        invDir: glm.vec3.fromValues(
+            1.0 / rayDir[0],
+            1.0 / rayDir[1],
+            1.0 / rayDir[2]
+        ),
+    };
 }
 
 //================================//
-export function rayIntersectsSphere(rayOrigin: Float32Array, rayDir: Float32Array, sphereCenter: glm.vec3, sphereRadius: number): number
+export function rayIntersectsSphere(ray: Ray, sphereCenter: glm.vec3, sphereRadius: number): number
 {
-    const L = new Float32Array([
-        sphereCenter[0] - rayOrigin[0],
-        sphereCenter[1] - rayOrigin[1],
-        sphereCenter[2] - rayOrigin[2],
-    ]);
-    const tca = vec3Dot(L, rayDir);
+    const L = glm.vec3.fromValues(
+        sphereCenter[0] - ray.origin[0],
+        sphereCenter[1] - ray.origin[1],
+        sphereCenter[2] - ray.origin[2],
+    );
+    const tca = glm.vec3.dot(L, ray.direction);
     if (tca < 0) return -1;
 
-    const d2 = vec3Dot(L, L) - tca * tca;
+    const d2 = glm.vec3.dot(L, L) - tca * tca;
     const radius2 = sphereRadius * sphereRadius;
     if (d2 > radius2) return -1;
     
@@ -462,15 +469,18 @@ export function rayIntersectsSphere(rayOrigin: Float32Array, rayDir: Float32Arra
 }
 
 //================================//
-export function rayIntersectsAABB(rayOrigin: Float32Array, rayDir: Float32Array, boxMin: glm.vec3, boxMax: glm.vec3): number
+export function rayIntersectsAABB(ray: Ray, boxMin: glm.vec3, boxMax: glm.vec3): number
 {
-    let tmin = (boxMin[0] - rayOrigin[0]) / rayDir[0];
-    let tmax = (boxMax[0] - rayOrigin[0]) / rayDir[0];
+    const invDirX = ray.direction[0] !== 0 ? 1.0 / ray.direction[0] : (ray.direction[0] >= 0 ? 1e30 : -1e30);
+
+    let tmin = (boxMin[0] - ray.origin[0]) * invDirX;
+    let tmax = (boxMax[0] - ray.origin[0]) * invDirX;
 
     if (tmin > tmax) [tmin, tmax] = [tmax, tmin];
 
-    let tymin = (boxMin[1] - rayOrigin[1]) / rayDir[1];
-    let tymax = (boxMax[1] - rayOrigin[1]) / rayDir[1];
+    const invDirY = ray.direction[1] !== 0 ? 1.0 / ray.direction[1] : (ray.direction[1] >= 0 ? 1e30 : -1e30);
+    let tymin = (boxMin[1] - ray.origin[1]) * invDirY;
+    let tymax = (boxMax[1] - ray.origin[1]) * invDirY;
 
     if (tymin > tymax) [tymin, tymax] = [tymax, tymin];
 
@@ -479,8 +489,9 @@ export function rayIntersectsAABB(rayOrigin: Float32Array, rayDir: Float32Array,
     if (tymin > tmin) tmin = tymin;
     if (tymax < tmax) tmax = tymax;
 
-    let tzmin = (boxMin[2] - rayOrigin[2]) / rayDir[2];
-    let tzmax = (boxMax[2] - rayOrigin[2]) / rayDir[2];
+    const invDirZ = ray.direction[2] !== 0 ? 1.0 / ray.direction[2] : (ray.direction[2] >= 0 ? 1e30 : -1e30);
+    let tzmin = (boxMin[2] - ray.origin[2]) * invDirZ;
+    let tzmax = (boxMax[2] - ray.origin[2]) * invDirZ;
 
     if (tzmin > tzmax) [tzmin, tzmax] = [tzmax, tzmin];
 
@@ -489,7 +500,6 @@ export function rayIntersectsAABB(rayOrigin: Float32Array, rayDir: Float32Array,
     if (tzmin > tmin) tmin = tzmin;
     if (tzmax < tmax) tmax = tzmax;
 
-    if (tmin < 0) return -1;
-
-    return tmin;
+    if (tmax < 0) return -1;
+    return tmin >= 0 ? tmin : 0;
 }

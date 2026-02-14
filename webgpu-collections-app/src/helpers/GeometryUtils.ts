@@ -19,8 +19,16 @@ interface VertexInformation
 export interface Transform
 {
     translation: glm.vec3,
-    rotation: glm.vec3,
+    rotation: glm.quat,
     scale: glm.vec3
+}
+
+//================================//
+export interface Ray
+{
+    origin: glm.vec3,
+    direction: glm.vec3
+    invDir: glm.vec3
 }
 
 //================================//
@@ -65,9 +73,11 @@ export class Mesh
     public Material: Material;
 
     public name: string;
-    public transform: Transform;
 
-    public BVH: BVH;
+    private transform: Transform;
+    private BVH: BVH;
+    private WorldMatrix: glm.mat4;
+    private inverseWorldMatrix: glm.mat4;
 
     //================================//
     constructor(name: string, material: Material)
@@ -81,13 +91,65 @@ export class Mesh
 
         this.BVH = new BVH();
 
-        this.transform = { translation: glm.vec3.create(), rotation: glm.vec3.create(), scale: glm.vec3.fromValues(1, 1, 1) };
+        this.transform = { translation: glm.vec3.create(), rotation: glm.quat.create(), scale: glm.vec3.fromValues(1, 1, 1) };
+
+        this.WorldMatrix = glm.mat4.create();
+        this.inverseWorldMatrix = glm.mat4.create();
     }
 
     //================================//
     public TransformMesh(transform: Transform): void
     {
         this.transform = transform;
+        this.computeMatrices();
+    }
+
+    //================================//
+    private computeMatrices(): void
+    {
+        this.WorldMatrix = glm.mat4.create();
+        glm.mat4.fromRotationTranslationScale(
+            this.WorldMatrix,
+            this.transform.rotation,      // quat, not euler
+            this.transform.translation,
+            this.transform.scale
+        );
+
+        this.inverseWorldMatrix = glm.mat4.create();
+        glm.mat4.invert(this.inverseWorldMatrix, this.WorldMatrix);
+    }
+
+    //================================//
+    public GetWorldMatrix(): glm.mat4
+    {
+        return this.WorldMatrix;
+    }
+
+    //================================//
+    public GetInverseWorldMatrix(): glm.mat4
+    {
+        return this.inverseWorldMatrix;
+    }
+
+    //================================//
+    public GetFlatWorldMatrix(): Float32Array
+    {
+        return new Float32Array(this.WorldMatrix);
+    }
+
+    //================================//
+    public GetFlatNormalMatrix(): Float32Array
+    {
+        const normalMatrix = glm.mat3.create();
+        glm.mat3.normalFromMat4(normalMatrix, this.WorldMatrix);
+
+        const padded = new Float32Array(12);
+        padded[0]  = normalMatrix[0]; padded[1]  = normalMatrix[1]; padded[2]  = normalMatrix[2];
+        padded[4]  = normalMatrix[3]; padded[5]  = normalMatrix[4]; padded[6]  = normalMatrix[5];
+        padded[8]  = normalMatrix[6]; padded[9]  = normalMatrix[7]; padded[10] = normalMatrix[8];
+
+        console.log("Normal Matrix:", normalMatrix);
+        return padded;
     }
 
     //================================//
@@ -139,16 +201,27 @@ export class Mesh
 
         for (let i = 0; i < this.vertices.length; ++i)
         {
-            // Transform vertex position based on transform (only translation)
             const pos = this.vertices[i].pos;
-            const transformedPos = glm.vec3.create();
-            glm.vec3.add(transformedPos, pos, this.transform.translation);
-            float32View.set(transformedPos, i * 3);
+            float32View.set(pos, i * 3);
         }
 
         return float32View;
     }
 
+    //================================//
+    public getTransformedVertexData(): Float32Array
+    {
+        const float32View = new Float32Array(this.vertices.length * 3);
+        const temp = glm.vec3.create();
+
+        for (let i = 0; i < this.vertices.length; ++i)
+        {
+            glm.vec3.transformMat4(temp, this.vertices[i].pos, this.WorldMatrix);
+            float32View.set(temp, i * 3);
+        }
+
+        return float32View;
+    }
     //================================//
     public getNormalData(): Float32Array
     {
@@ -158,6 +231,24 @@ export class Mesh
         for (let i = 0; i < this.vertices.length; ++i)
         {
             float32View.set(this.vertices[i].normal, i * 3);
+        }
+
+        return float32View;
+    }
+
+    //================================//
+    public getTransformedNormalData(): Float32Array
+    {
+        const float32View = new Float32Array(this.vertices.length * 3);
+        const normalMat = glm.mat3.create();
+        glm.mat3.normalFromMat4(normalMat, this.WorldMatrix);
+        const temp = glm.vec3.create();
+
+        for (let i = 0; i < this.vertices.length; ++i)
+        {
+            glm.vec3.transformMat3(temp, this.vertices[i].normal, normalMat);
+            glm.vec3.normalize(temp, temp);
+            float32View.set(temp, i * 3);
         }
 
         return float32View;
@@ -209,6 +300,34 @@ export class Mesh
     public ComputeBVH(): void
     {
         this.BVH.buildBVH(this);
+    }
+
+    //================================//
+    public GetBVHGeometry(maxDepth: number = Infinity): { vertexData: Float32Array, count: number }
+    {
+        return this.BVH.generateWireframeGeometry(this.GetWorldMatrix(), maxDepth);
+    }
+
+    //================================//
+    intersectMeshWithRay(ray: Ray, depth: number): number
+    {
+        const localRayOrigin = glm.vec3.create();
+        glm.vec3.transformMat4(localRayOrigin, ray.origin, this.GetInverseWorldMatrix());
+
+        const localRayDirection = glm.vec3.create();
+        const invMat3 = glm.mat3.create(); 
+        glm.mat3.fromMat4(invMat3, this.GetInverseWorldMatrix()); // No translation for direction
+        glm.vec3.transformMat3(localRayDirection, ray.direction, invMat3);
+
+        const localRay: Ray = {
+            origin: localRayOrigin,
+            direction: localRayDirection,
+            invDir: glm.vec3.fromValues(1 / localRayDirection[0], 1 / localRayDirection[1], 1 / localRayDirection[2])
+        }
+
+        const dist = this.BVH.traverse(localRay, depth);
+
+        return dist;
     }
 }
 
@@ -1202,7 +1321,7 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
         addSphere(
             Meshes[i + 4],
             [0, 0, 0],
-            sphereRadius,
+            1.0,
             sphereResolution,
             sphereResolution
         );
@@ -1215,7 +1334,7 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
             middleCubeCenter[1] + directions[0][1] * distanceToCenter,
             middleCubeCenter[2] + directions[0][2] * distanceToCenter
         ),
-        rotation: glm.vec3.fromValues(0, 0, 0),
+        rotation: glm.quat.fromValues(0, 0, 0, 1),
         scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
     });
     Meshes[5].TransformMesh(
@@ -1225,7 +1344,7 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
             middleCubeCenter[1] + directions[1][1] * distanceToCenter,
             middleCubeCenter[2] + directions[1][2] * distanceToCenter
         ),
-        rotation: glm.vec3.fromValues(0, 0, 0),
+        rotation: glm.quat.fromValues(0, 0, 0, 1),
         scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
     });
     Meshes[6].TransformMesh(
@@ -1235,7 +1354,7 @@ export function createCornellBox2(sphereMaterials: Material[], sphereResolution:
             middleCubeCenter[1] + directions[2][1] * distanceToCenter,
             middleCubeCenter[2] + directions[2][2] * distanceToCenter
         ),
-        rotation: glm.vec3.fromValues(0, 0, 0),
+        rotation: glm.quat.fromValues(0, 0, 0, 1),
         scale: glm.vec3.fromValues(sphereRadius, sphereRadius, sphereRadius)
     });
 
@@ -1361,15 +1480,20 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     loadedDragonMesh.Material = dragonMaterial;
     loadedDragonMesh.TransformMesh({
         translation: glm.vec3.fromValues(middleCubeCenter[0], middleCubeCenter[1], middleCubeCenter[2]),
-        rotation: glm.vec3.fromValues(0, 0, 0),
-        scale: glm.vec3.fromValues(50, 50, 50)
+        rotation: glm.quat.fromEuler(glm.quat.create(), 0, 0, 0),
+        scale: glm.vec3.fromValues(2, 2, 2)
     });
     Meshes.push(loadedDragonMesh);
+
+    for (const mesh of Meshes)
+    {
+        mesh.ComputeBVH();
+    }
 
     return {
         meshes: Meshes,
         additionalInfo: {
-            meshMaterialIndices: [4],
+            meshIndices: [4],
             meshTransforms: [Meshes[4].GetTransform()],
             meshMaterials: [
                 Meshes[4].GetMaterial(), // dragon

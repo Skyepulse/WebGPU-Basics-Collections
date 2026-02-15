@@ -12,6 +12,7 @@ import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/O
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy } from '@src/helpers/CameraHelpers';
 import { createCornellBox, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import { rotationMatrix3 } from '@src/helpers/MathUtils';
+import * as glm from 'gl-matrix';
 
 //================================//
 export async function startup_8(canvas: HTMLCanvasElement)
@@ -659,7 +660,10 @@ class RayTracer
         {
             const data = new Float32Array(normalUniformDataSize / 4);
             let offset = 0;
-            data.set(this.camera.modelMatrix, offset); offset += 16;
+
+            const identity = glm.mat4.create();
+            glm.mat4.identity(identity);
+            data.set(identity, offset); offset += 16;
             data.set(this.camera.viewMatrix, offset); offset += 16;
             data.set(this.camera.projectionMatrix, offset); offset += 16;
             data.set(this.light.position, offset); offset += 4;

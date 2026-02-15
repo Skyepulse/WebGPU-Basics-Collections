@@ -74,7 +74,6 @@ export function resizeImage(image: HTMLImageElement, targetWidth: number, target
     if (!ctx) 
     {
         console.error("Failed to get 2D context for image resizing.");
-        // Return a blank canvas of the target size as fallback
         return resizeCanvas;
     }
 

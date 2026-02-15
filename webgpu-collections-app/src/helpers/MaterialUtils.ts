@@ -12,14 +12,14 @@ export interface Material
     usePerlinMetalness: boolean;
     perlinFreq: number;
 
-    albedoTexture?: HTMLImageElement;
+    albedoTexture?: HTMLImageElement | HTMLCanvasElement;
     useAlbedoTexture: boolean;
-    metalnessTexture?: HTMLImageElement;
+    metalnessTexture?: HTMLImageElement | HTMLCanvasElement;
     useMetalnessTexture: boolean;
-    roughnessTexture?: HTMLImageElement;
+    roughnessTexture?: HTMLImageElement | HTMLCanvasElement;
     useRoughnessTexture: boolean;
     useNormalTexture: boolean;
-    normalTexture?: HTMLImageElement;
+    normalTexture?: HTMLImageElement | HTMLCanvasElement;
 
     albedoGPUTexture?: GPUTexture;
     metalnessGPUTexture?: GPUTexture;

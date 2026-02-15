@@ -105,6 +105,13 @@ export class Mesh
     }
 
     //================================//
+    public RotateMesh(rotation: glm.quat): void
+    {
+        glm.quat.multiply(this.transform.rotation, this.transform.rotation, rotation);
+        this.computeMatrices();
+    }
+
+    //================================//
     private computeMatrices(): void
     {
         this.WorldMatrix = glm.mat4.create();
@@ -148,8 +155,13 @@ export class Mesh
         padded[4]  = normalMatrix[3]; padded[5]  = normalMatrix[4]; padded[6]  = normalMatrix[5];
         padded[8]  = normalMatrix[6]; padded[9]  = normalMatrix[7]; padded[10] = normalMatrix[8];
 
-        console.log("Normal Matrix:", normalMatrix);
         return padded;
+    }
+
+    //================================//
+    public GetFlatInverseWorldMatrix(): Float32Array
+    {
+        return new Float32Array(this.inverseWorldMatrix);
     }
 
     //================================//
@@ -309,6 +321,12 @@ export class Mesh
     }
 
     //================================//
+    public getFlattenedBVHData(nodeOffset: number = 0): { data: ArrayBuffer, numNodes: number }
+    {
+        return this.BVH.getFlattenedBVHData(nodeOffset);
+    }
+
+    //================================//
     intersectMeshWithRay(ray: Ray, depth: number): number
     {
         const localRayOrigin = glm.vec3.create();
@@ -328,6 +346,12 @@ export class Mesh
         const dist = this.BVH.traverse(localRay, depth);
 
         return dist;
+    }
+
+    //================================//
+    public getReorderedIndexData32(): Uint32Array
+    {
+        return this.BVH.getReorderedIndices(this.indices);
     }
 }
 

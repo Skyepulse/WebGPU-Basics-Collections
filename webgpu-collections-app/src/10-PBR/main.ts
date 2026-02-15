@@ -1334,7 +1334,7 @@ class RayTracer
         promise.then(image => {
 
             // Resize
-            const resizedImage: HTMLImageElement = resizeImage(image, 256, 256);
+            const resizedImage: HTMLCanvasElement = resizeImage(image, 256, 256);
             const gpuTexture = createTextureFromImage(this.device!, resizedImage);
 
             switch (type)

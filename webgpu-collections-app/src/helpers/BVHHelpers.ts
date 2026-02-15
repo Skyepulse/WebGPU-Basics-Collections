@@ -26,12 +26,15 @@ interface bin
 //================================//
 export class BVHTriangle
 {
+    originalIndex: number; // Original place in the array before swap
     public center: [number, number, number];
     public MinValues: [number, number, number];
     public MaxValues: [number, number, number];
 
-    constructor(public v0: [number, number, number], public v1: [number, number, number], public v2: [number, number, number])
+    constructor(public v0: [number, number, number], public v1: [number, number, number], public v2: [number, number, number], originalIndex: number)
     {
+        this.originalIndex = originalIndex;
+
         const x0 = v0[0], y0 = v0[1], z0 = v0[2];
         const x1 = v1[0], y1 = v1[1], z1 = v1[2];
         const x2 = v2[0], y2 = v2[1], z2 = v2[2];
@@ -94,7 +97,7 @@ export class BVH
             const posA: [number, number, number] = [this.Triangles[i].vA.pos[0], this.Triangles[i].vA.pos[1], this.Triangles[i].vA.pos[2]];
             const posB: [number, number, number] = [this.Triangles[i].vB.pos[0], this.Triangles[i].vB.pos[1], this.Triangles[i].vB.pos[2]];
             const posC: [number, number, number] = [this.Triangles[i].vC.pos[0], this.Triangles[i].vC.pos[1], this.Triangles[i].vC.pos[2]];
-            const t = new BVHTriangle(posA, posB, posC);
+            const t = new BVHTriangle(posA, posB, posC, i);
             this.builtTriangles.push(t);
 
             const min = t.MinValues;
@@ -112,6 +115,20 @@ export class BVH
         this.Nodes.push(new BVHNode([minX, minY, minZ], [maxX, maxY, maxZ], -1, -1));
 
         this.buildTree(0, 0, numTriangles);
+    }
+
+    //================================//
+    public getReorderedIndices(originalIndices: number[]): Uint32Array
+    {
+        const result = new Uint32Array(this.builtTriangles.length * 3);
+        for (let i = 0; i < this.builtTriangles.length; i++)
+        {
+            const origTri = this.builtTriangles[i].originalIndex;
+            result[i * 3 + 0] = originalIndices[origTri * 3 + 0];
+            result[i * 3 + 1] = originalIndices[origTri * 3 + 1];
+            result[i * 3 + 2] = originalIndices[origTri * 3 + 2];
+        }
+        return result;
     }
 
     //================================//
@@ -449,5 +466,42 @@ export class BVH
             }
         }
         return closestDistance;
+    }
+
+    //================================//
+    public getFlattenedBVHData(nodeOffset: number = 0): { data: ArrayBuffer, numNodes: number }
+    {
+        const numNodes = this.Nodes.length;
+        const data = new ArrayBuffer(numNodes * 8 * 4);
+        const float32View = new Float32Array(data);
+        const uint32View = new Uint32Array(data);
+
+        for (let i = 0; i < this.Nodes.length; ++i)
+        {
+            const base = i * 8;
+            const node = this.Nodes[i];
+
+            float32View[base + 0] = node.minBounds[0];
+            float32View[base + 1] = node.minBounds[1];
+            float32View[base + 2] = node.minBounds[2];
+
+
+            float32View[base + 4] = node.maxBounds[0];
+            float32View[base + 5] = node.maxBounds[1];
+            float32View[base + 6] = node.maxBounds[2];
+
+            uint32View[base + 7] = node.triangleCount > 0 ? node.triangleCount : 0;
+
+            if (node.triangleCount > 0) 
+            {
+                uint32View[base + 3] = node.startIndex;
+            } 
+            else 
+            {
+                uint32View[base + 3] = node.startIndex + nodeOffset;
+            } 
+        }
+
+        return { data, numNodes: this.Nodes.length };
     }
 }

@@ -134,7 +134,7 @@ fn microfacetBRDF(input: VertexOutput) -> vec3f
     }
     if (material.useRoughnessTexture > 0.5)
     {
-        alphap = textureSample(roughnessTexture, materialSampler, input.uv).r;
+        alphap = textureSample(roughnessTexture, materialSampler, input.uv).g; // green channel for roughness
     }
     alphap = max(alphap, 0.001);
 

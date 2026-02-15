@@ -632,7 +632,10 @@ class TransparencyRenderer
         const data = new ArrayBuffer(uniformDataSize);
         const floatView = new Float32Array(data);
 
-        floatView.set(this.camera.modelMatrix, 0); // 16 floats
+        const identityMatrix = glm.mat4.create();
+        glm.mat4.identity(identityMatrix);
+
+        floatView.set(identityMatrix, 0); // 16 floats
         floatView.set(this.camera.viewMatrix, 16); // 16 floats
         floatView.set(this.camera.projectionMatrix, 32); // 16 floats
         floatView.set(this.light.position, 48); // 4 floats

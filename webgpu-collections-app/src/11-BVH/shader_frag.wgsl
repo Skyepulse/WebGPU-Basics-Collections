@@ -22,7 +22,7 @@ struct Uniform
     a_c: f32,
     a_l: f32,
     a_q: f32,
-    _pad0: f32,
+    bvhVisualizationDepth: f32,
 
     lights: array<SpotLight, 3>, // 48 * 3 = 144 bytes
 }; // Total: 224 bytes
@@ -68,7 +68,31 @@ struct Hit
     normalAtHit: vec3f,
     uvAtHit: vec2f,
     accumulatedColor: vec3f,
+    instanceIndex: u32,
+    numBoxQueries: u32,
+    numTriangleQueries: u32,
 };
+
+// ============================== //
+struct BVHNode
+{
+    minB: vec3f,
+    leftOrFirst: u32,
+    maxB: vec3f,
+    count: u32,
+};
+
+// ============================== //
+struct MeshInstance
+{
+    inverseWorldMatrix: mat4x4<f32>,
+
+    bvhRootIndex: u32,
+    triOffset: u32,
+    vertOffset: u32,
+    matIndex: u32,
+
+}; // Total: 16 * 4 + 4 * 4 = 80 bytes
 
 // ============================== //
 struct VertexOutput 
@@ -82,7 +106,8 @@ struct VertexOutput
 @group(0) @binding(2) var<storage, read> normals: array<f32>;
 @group(0) @binding(3) var<storage, read> uvs: array<f32>;
 @group(0) @binding(4) var<storage, read> indices: array<u32>;
-@group(0) @binding(5) var<storage, read> materialIndices: array<u32>; // which material for each triangle
+@group(0) @binding(5) var<storage, read> bvhNodes: array<BVHNode>;
+@group(0) @binding(6) var<storage, read> meshInstances: array<MeshInstance>;
 
 @group(1) @binding(0) var<storage, read> materials: array<f32>;
 @group(1) @binding(1) var materialSampler: sampler;
@@ -111,9 +136,10 @@ fn getUV(index: u32) -> vec2f
 }
 
 // ============================== //
-fn getMaterial(TriIndex: u32) -> Material
+fn getMaterial(instance: u32) -> Material
 {
-    let materialIndex = materialIndices[TriIndex]; // Which material are we talking about ?
+    let meshInstance = meshInstances[instance];
+    let materialIndex = meshInstance.matIndex; // Which material are we talking about ?
     let baseIndex = materialIndex * 16u;
 
     var mat: Material;
@@ -194,67 +220,228 @@ fn rayTriangleIntersect(ray: Ray, triIndex: u32, hitCoord: ptr<function, vec3f>)
 }
 
 // ============================== //
-fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>, maxDist: f32, shadow: bool) -> bool
+fn rayAABBIntersect(ray: Ray, invDir: vec3f, bMin: vec3f, bMax: vec3f, maxDist: f32) -> bool
 {
-    let numTriangles: u32 = u32(arrayLength(&indices)) / 3u;
+    let t1 = (bMin - ray.origin) * invDir;
+    let t2 = (bMax - ray.origin) * invDir;
 
-    var closestT: f32 = 1e30;
-    var hitSomething: bool = false;
+    let tmin = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
+    let tmax = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
 
-    for (var i: u32 = 0u; i < numTriangles; i = i + 1u)
+    return tmax >= max(tmin, 0.0) && tmin < maxDist;
+}
+
+// ============================== //
+fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: ptr<function, Hit>, shadow: bool, instanceIndex: u32) -> bool
+{
+    let invDir = vec3f(1.0 / ray.direction.x, 1.0 / ray.direction.y, 1.0 / ray.direction.z);
+
+    var stack: array<u32, 32>;
+    var stackPtr: i32 = 0;
+
+    // Push the root
+    stack[0] = inst.bvhRootIndex;
+    stackPtr = 1;
+
+    var hitAnything: bool = false;
+    var numBoxQueries: u32 = 0u;
+    var numTriangleQueries: u32 = 0u;
+
+    while (stackPtr > 0)
     {
-        var barycentricCoords: vec3f;
-        if (rayTriangleIntersect(ray, i, &barycentricCoords))
+        stackPtr = stackPtr - 1;
+        let nodeIndex = stack[stackPtr];
+        let node: BVHNode = bvhNodes[nodeIndex];
+
+        if (!rayAABBIntersect(ray, invDir, node.minB, node.maxB, (*closestT)))
         {
-            let t = barycentricCoords.x;
-            if (t > maxDist)
+            continue;
+        }
+
+        numBoxQueries = numBoxQueries + 1u;
+
+        if (node.count > 0u) // leaf
+        {
+            for (var i = 0u; i < node.count; i++) // triangles per se...
             {
-                continue;
+                let localTriIdx = node.leftOrFirst + i;
+                let globalTriIdx = localTriIdx + inst.triOffset;
+
+                var bary: vec3f;
+                if (rayTriangleIntersect(ray, globalTriIdx, &bary))
+                {
+                    numTriangleQueries = numTriangleQueries + 1u;
+                    if (bary.x < *closestT)
+                    {
+                        if (shadow) { return true; }
+
+                        *closestT = bary.x;
+                        hitAnything = true;
+
+                        let idx0 = indices[globalTriIdx * 3u + 0u];
+                        let idx1 = indices[globalTriIdx * 3u + 1u];
+                        let idx2 = indices[globalTriIdx * 3u + 2u];
+
+                        let w = 1.0 - bary.y - bary.z;
+                        let interpNormal = normalize(getNormal(idx0) * w + getNormal(idx1) * bary.y + getNormal(idx2) * bary.z);
+                        let interpUV = getUV(idx0) * w + getUV(idx1) * bary.y + getUV(idx2) * bary.z;
+
+                        (*hit).triIndex = globalTriIdx;
+                        (*hit).barycentricCoords = bary;
+                        (*hit).distance = bary.x;
+                        (*hit).normalAtHit = interpNormal;
+                        (*hit).uvAtHit = interpUV;
+                        (*hit).instanceIndex = instanceIndex;
+                        (*hit).numBoxQueries = numBoxQueries;
+                        (*hit).numTriangleQueries = numTriangleQueries;
+                    }
+                }
             }
+        }
+        else
+        {
+            // Small optimization: push farthest node first, so we traverse closest one first
+            let leftIdx = node.leftOrFirst;
+            let rightIdx = node.leftOrFirst + 1u;
 
-            if (shadow)
+            let leftNode = bvhNodes[leftIdx];
+            let rightNode = bvhNodes[rightIdx];
+
+            let leftCenter = (leftNode.minB + leftNode.maxB) * 0.5;
+            let rightCenter = (rightNode.minB + rightNode.maxB) * 0.5;
+
+            let leftDist = dot(leftCenter - ray.origin, ray.direction);
+            let rightDist = dot(rightCenter - ray.origin, ray.direction);
+
+            if (leftDist < rightDist)
             {
-                return true; // If we are just checking for shadow ray, we can return immediately on first hit
+                stack[stackPtr] = rightIdx; stackPtr += 1;
+                stack[stackPtr] = leftIdx;  stackPtr += 1;
             }
-
-            if (t < closestT)
+            else
             {
-                closestT = t;
-                hitSomething = true;
-
-                let normal0 = getNormal(indices[i * 3u + 0u]);
-                let normal1 = getNormal(indices[i * 3u + 1u]);
-                let normal2 = getNormal(indices[i * 3u + 2u]);
-                let interpolatedNormal = normalize(normal0 * (1.0 - barycentricCoords.y - barycentricCoords.z) + normal1 * barycentricCoords.y + normal2 * barycentricCoords.z);
-
-                let uv0 = getUV(indices[i * 3u + 0u]);
-                let uv1 = getUV(indices[i * 3u + 1u]);
-                let uv2 = getUV(indices[i * 3u + 2u]);
-                let interpolatedUV = uv0 * (1.0 - barycentricCoords.y - barycentricCoords.z) + uv1 * barycentricCoords.y + uv2 * barycentricCoords.z;
-            
-                (*hit).triIndex = i;
-                (*hit).barycentricCoords = barycentricCoords;
-                (*hit).distance = t;
-                (*hit).normalAtHit = interpolatedNormal;
-                (*hit).uvAtHit = interpolatedUV;
+                stack[stackPtr] = leftIdx;  stackPtr += 1;
+                stack[stackPtr] = rightIdx; stackPtr += 1;
             }
         }
     }
 
-    return hitSomething;
+    return hitAnything;
 }
 
 // ============================== //
-fn getHitColor(hit: Hit) -> vec3f
+fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
 {
-    let i = hit.triIndex;
-    let bary = hit.barycentricCoords;
-    let w = 1.0 - bary.y - bary.z;
-    
-    let material = getMaterial(i);
-    let color = material.albedo;
-    
-    return color;
+    let numInstances = arrayLength(&meshInstances);
+    var hitCount: u32 = 0u;
+    var leafTriCount: u32 = 0u;
+    var deepestHit: u32 = 0u;
+
+    for (var j: u32 = 0u; j < numInstances; j++)
+    {
+        let inst = meshInstances[j];
+
+        var localRay: Ray;
+        localRay.origin = (inst.inverseWorldMatrix * vec4f(ray.origin, 1.0)).xyz;
+        localRay.direction = (inst.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
+
+        let invDir = vec3f(1.0 / localRay.direction.x, 1.0 / localRay.direction.y, 1.0 / localRay.direction.z);
+
+        var stackNode: array<u32, 64>;
+        var stackDepth: array<u32, 64>;
+        var stackPtr: i32 = 0;
+        stackNode[0] = inst.bvhRootIndex;
+        stackDepth[0] = 0u;
+        stackPtr = 1;
+
+        while (stackPtr > 0)
+        {
+            stackPtr -= 1;
+            let nodeIndex = stackNode[stackPtr];
+            let depth = stackDepth[stackPtr];
+            let node = bvhNodes[nodeIndex];
+
+            if (!rayAABBIntersect(localRay, invDir, node.minB, node.maxB, 1e30))
+            {
+                continue;
+            }
+
+            if (depth > deepestHit) { deepestHit = depth; }
+
+            if (depth == targetDepth)
+            {
+                hitCount += 1u;
+                continue;
+            }
+
+            if (node.count > 0u)
+            {
+                hitCount += 1u;
+                leafTriCount += node.count;
+                continue;
+            }
+
+            let leftIdx = node.leftOrFirst;
+            let rightIdx = node.leftOrFirst + 1u;
+            stackNode[stackPtr] = rightIdx;
+            stackDepth[stackPtr] = depth + 1u;
+            stackPtr += 1;
+            stackNode[stackPtr] = leftIdx;
+            stackDepth[stackPtr] = depth + 1u;
+            stackPtr += 1;
+        }
+    }
+
+    if (hitCount == 0u) { return vec3f(0.0); }
+
+    // Heatmap: blue (1 hit) → green (few) → yellow → red (many)
+    let t = clamp(f32(hitCount) / 8.0, 0.0, 1.0);
+    if (t < 0.5)
+    {
+        return mix(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0), t * 2.0);
+    }
+    return mix(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), (t - 0.5) * 2.0);
+}
+
+// ============================== //
+fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>, maxDist: f32, shadow: bool) -> bool
+{
+    let numInstances: u32 = u32(arrayLength(&meshInstances));
+
+    var closestT: f32 = 1e30;
+    var hitSomething: bool = false;
+
+    for (var j: u32 = 0u; j < numInstances; j = j + 1u)
+    {
+        let meshInstance = meshInstances[j];
+
+        var localRay: Ray;
+        localRay.origin = (meshInstance.inverseWorldMatrix * vec4f(ray.origin, 1.0)).xyz;
+        localRay.direction = (meshInstance.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
+
+        if (traverseBVH(localRay, meshInstance, &closestT, hit, shadow, j))
+        {
+            hitSomething = true;
+            if (shadow)
+            {
+                return true;
+            }
+        }
+    }
+
+    // Get the normal back into world space
+    if (hitSomething)
+    {
+        let inst = meshInstances[(*hit).instanceIndex];
+        let normalMatrix = transpose(mat3x3f(
+            inst.inverseWorldMatrix[0].xyz,
+            inst.inverseWorldMatrix[1].xyz,
+            inst.inverseWorldMatrix[2].xyz
+        ));
+        (*hit).normalAtHit = normalize(normalMatrix * (*hit).normalAtHit);
+    }
+
+    return hitSomething;
 }
 
 // ============================== //
@@ -280,7 +467,7 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
     }
     if (material.useRoughnessTexture > 0.5 && material.textureIndex >= 0.0)
     {
-        alphap = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 2.0).r;
+        alphap = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 2.0).g;
     }
     alphap = max(alphap, 0.001);
     
@@ -461,6 +648,13 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     let ray = ray_at(input.uv);
     let maxDistance: f32 = 2000.0;
 
+    if (uniforms.mode == 1u)
+    {
+        let depth = u32(uniforms.bvhVisualizationDepth - 1.0);
+        let color = debugBVHTraversal(ray, depth);
+        return vec4f(color, 1.0);
+    }
+
     var hit: Hit;
     var color: vec3f = vec3f(0.0, 0.0, 0.0);
 
@@ -469,7 +663,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
         if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
             let hitPos = getHitPosition(ray, hit.distance);
-            let material = getMaterial(hit.triIndex);
+            let material = getMaterial(hit.instanceIndex);
             //color = computeLambertShading(hitPos, hit.normalAtHit, material.albedo);
             color = computeMicrofacetBRDF(hitPos, hit.normalAtHit, material, hit.uvAtHit);
         }
@@ -478,7 +672,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
             color = vec3f(0.0, 0.0, 0.0);
         }
     }
-    else if (uniforms.mode == 1u)
+    else if (uniforms.mode == 2u)
     {
         if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
@@ -490,7 +684,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
             color = vec3f(0.0, 0.0, 0.0);
         }
     }
-    else if (uniforms.mode == 2u)
+    else if (uniforms.mode == 3u)
     {
         if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
@@ -503,7 +697,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
             color = vec3f(0.0, 0.0, 0.0);
         }
     }
-    else if (uniforms.mode == 3u)
+    else if (uniforms.mode == 4u)
     {
         // visualize ray directions
         let dir = normalize(ray.direction);

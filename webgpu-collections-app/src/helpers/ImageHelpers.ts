@@ -26,13 +26,13 @@ export function loadImageFromUrl(url: string): Promise<HTMLImageElement>
 }
 
 /*
- * Creates a GPUTexture from an HTMLImageElement.
+ * Creates a GPUTexture from an HTMLImageElement or HTMLCanvasElement.
  * @param device The GPU device to create the texture on.
- * @param image The HTMLImageElement containing the image data to create the texture from.
+ * @param image The image source (HTMLImageElement or HTMLCanvasElement) to create the texture from.
  * @param labelName An optional label for the texture for debugging purposes.
  * @return A GPUTexture created from the provided image, ready to be used in rendering or as a bindable resource.
  */
-export function createTextureFromImage(device: GPUDevice, image: HTMLImageElement, labelName: string = "texture"): GPUTexture
+export function createTextureFromImage(device: GPUDevice, image: HTMLImageElement | HTMLCanvasElement, labelName: string = "texture"): GPUTexture
 {
     // Check if the image is sane
     if (image.width <= 0 || image.height <= 0)
@@ -62,10 +62,10 @@ export function createTextureFromImage(device: GPUDevice, image: HTMLImageElemen
 
 /*
  * Resize image to target dimensions.
+ * Returns an HTMLCanvasElement which can be used directly by WebGPU.
  */
-export function resizeImage(image: HTMLImageElement, targetWidth: number, targetHeight: number): HTMLImageElement
+export function resizeImage(image: HTMLImageElement, targetWidth: number, targetHeight: number): HTMLCanvasElement
 {
-    // We need to pass through a canvas to resize the image
     const resizeCanvas = document.createElement('canvas');
     resizeCanvas.width = targetWidth;
     resizeCanvas.height = targetHeight;
@@ -74,15 +74,13 @@ export function resizeImage(image: HTMLImageElement, targetWidth: number, target
     if (!ctx) 
     {
         console.error("Failed to get 2D context for image resizing.");
-        return image;
+        // Return a blank canvas of the target size as fallback
+        return resizeCanvas;
     }
 
     ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
 
-    const resizedImage = new Image();
-    resizedImage.src = resizeCanvas.toDataURL();
-
-    return resizedImage;
+    return resizeCanvas;
 }
 
 /*

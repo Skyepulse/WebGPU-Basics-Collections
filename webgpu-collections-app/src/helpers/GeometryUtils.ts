@@ -317,7 +317,7 @@ export class Mesh
     //================================//
     public GetBVHGeometry(maxDepth: number = Infinity): { vertexData: Float32Array, count: number }
     {
-        return this.BVH.generateWireframeGeometry(this.GetWorldMatrix(), maxDepth);
+        return this.BVH.generateWireframeGeometry(maxDepth);
     }
 
     //================================//

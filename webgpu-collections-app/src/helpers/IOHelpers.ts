@@ -16,6 +16,12 @@ export async function loadMesh(url: string) : Promise<Mesh>
     try
     {
         const gltf = await load(url, GLTFLoader);
+        if (!gltf)
+        {
+            console.error('Failed to load GLTF file.');
+            return new Mesh("EmptyMesh", createDefaultMaterial({}));
+        }
+        
         const processedGLTF: GLTFPostprocessed = postProcessGLTF(gltf);
 
         const meshes: GLTFMeshPostprocessed[] = processedGLTF.meshes;

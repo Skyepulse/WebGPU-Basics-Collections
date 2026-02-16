@@ -67,8 +67,8 @@ interface normalObjects extends PipelineResources
     depthTexture: GPUTexture;
     sampler: GPUSampler;
 
-    bvhLineGeometryBuffer: GPUBuffer;
-    bvhLineCount: number;
+    bvhLineGeometryBuffers: GPUBuffer[];
+    bvhLineCounts: number[];
 
     bvhDrawPipelineLayout: GPUPipelineLayout;
     bvhDrawPipeline: GPURenderPipeline;
@@ -406,7 +406,7 @@ class RayTracer
 
         this.normalObjects.bvhDrawPipelineLayout = this.device.createPipelineLayout({
             label: 'BVH Draw Pipeline Layout',
-            bindGroupLayouts: [this.normalObjects.bindGroupLayout],
+            bindGroupLayouts: [this.normalObjects.bindGroupLayout, this.normalObjects.materialUniformBindGroupLayout],
         });
 
         this.normalObjects.depthTexture = this.device.createTexture({
@@ -650,13 +650,17 @@ class RayTracer
             }],
         });
 
-        const lineData = this.getBVHGeometry(Infinity); // This way create buffer at max capacity
-        this.normalObjects.bvhLineGeometryBuffer = this.device.createBuffer({
-            label: 'BVH Line Geometry Buffer',
-            size: lineData.length * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-        });
-        this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffer, 0, lineData as BufferSource);
+        const lineData: Float32Array[] = this.getBVHGeometry(Infinity); // This way create buffer at max capacity
+        this.normalObjects.bvhLineGeometryBuffers = [];
+        for (let i = 0; i < lineData.length; i++)
+        {
+            this.normalObjects.bvhLineGeometryBuffers[i] = this.device.createBuffer({
+                label: `BVH Line Geometry Buffer ${i}`,
+                size: lineData[i].byteLength,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+            });
+            this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
+        }
 
         // Ray Tracer Objects Buffers
         const flattenedPositions: number[] = [];
@@ -1162,8 +1166,12 @@ class RayTracer
                 {
                     pass.setPipeline(this.normalObjects.bvhDrawPipeline);
                     pass.setBindGroup(0, this.normalObjects.bindGroup);
-                    pass.setVertexBuffer(0, this.normalObjects.bvhLineGeometryBuffer);
-                    pass.draw(this.normalObjects.bvhLineCount);   
+                    for (let i = 0; i < this.normalObjects.bvhLineGeometryBuffers.length; i++)
+                    {
+                        pass.setBindGroup(1, this.normalObjects.materialBindGroups[i]);
+                        pass.setVertexBuffer(0, this.normalObjects.bvhLineGeometryBuffers[i]);
+                        pass.draw(this.normalObjects.bvhLineCounts[i]);   
+                    }
                 }
             }
             pass.end();
@@ -1366,28 +1374,19 @@ class RayTracer
     }
 
     //================================//
-    getBVHGeometry(desiredDepth: number): Float32Array
+    getBVHGeometry(desiredDepth: number): Float32Array[]
     {
-        if (this.normalObjects.sceneInformation.meshes.length === 0) return new Float32Array();
+        if (this.normalObjects.sceneInformation.meshes.length === 0) return [];
 
-        this.normalObjects.bvhLineCount = 0;
+        this.normalObjects.bvhLineCounts = [];
         const chunks: Float32Array[] = [];
-        let totalLength = 0;
         for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
         {
             const { vertexData, count } = this.normalObjects.sceneInformation.meshes[matNum].GetBVHGeometry(desiredDepth);
             chunks.push(vertexData);
-            totalLength += vertexData.length;
-            this.normalObjects.bvhLineCount += count;
+            this.normalObjects.bvhLineCounts.push(count);
         }
-        const result = new Float32Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks)
-        {
-            result.set(chunk, offset);
-            offset += chunk.length;
-        }
-        return result;
+        return chunks;
     }
 
     //================================//
@@ -1395,13 +1394,17 @@ class RayTracer
     {
         if (this.device === null) return;
 
-        const lineData = this.getBVHGeometry(this.bvhDepth);
-        this.normalObjects.bvhLineGeometryBuffer = this.device.createBuffer({
-            label: 'BVH Line Geometry Buffer',
-            size: lineData.length * 4,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-        });
-        this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffer, 0, lineData as BufferSource);
+        const lineData: Float32Array[] = this.getBVHGeometry(this.bvhDepth);
+        
+        for (let i = 0; i < lineData.length; i++)
+        {
+            this.normalObjects.bvhLineGeometryBuffers[i] = this.device.createBuffer({
+                label: `BVH Line Geometry Buffer ${i}`,
+                size: lineData[i].byteLength,
+                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+            });
+            this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
+        }
     }
 
     //================================//

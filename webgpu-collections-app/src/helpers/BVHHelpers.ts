@@ -1,6 +1,5 @@
 import { rayIntersectsAABB } from "./CameraHelpers";
 import type { Mesh, Ray, Triangle } from "./GeometryUtils";
-import * as glm from "gl-matrix";
 
 const floatMax = Number.MAX_VALUE;
 const floatMin = -Number.MAX_VALUE;
@@ -347,21 +346,9 @@ export class BVH
     }
 
     //================================//
-    public generateWireframeGeometry(worldMatrix: Float32Array | glm.mat4, maxDepth: number = Infinity): { vertexData: Float32Array, count: number }
+    public generateWireframeGeometry(maxDepth: number = Infinity): { vertexData: Float32Array, count: number }
     {
         const lines: number[] = [];
-        const hasTransform = worldMatrix !== undefined;
-
-        const transformPoint = (x: number, y: number, z: number): [number, number, number] =>
-        {
-            if (!hasTransform) return [x, y, z];
-            const m = worldMatrix!;
-            return [
-                m[0]*x + m[4]*y + m[8]*z  + m[12],
-                m[1]*x + m[5]*y + m[9]*z  + m[13],
-                m[2]*x + m[6]*y + m[10]*z + m[14],
-            ];
-        }
 
         const addEdge = (a: [number,number,number], b: [number,number,number]) => 
         {
@@ -370,14 +357,14 @@ export class BVH
 
         const addBox = (min: [number, number, number], max: [number, number, number]) =>
         {
-            const c000 = transformPoint(min[0], min[1], min[2]);
-            const c100 = transformPoint(max[0], min[1], min[2]);
-            const c010 = transformPoint(min[0], max[1], min[2]);
-            const c110 = transformPoint(max[0], max[1], min[2]);
-            const c001 = transformPoint(min[0], min[1], max[2]);
-            const c101 = transformPoint(max[0], min[1], max[2]);
-            const c011 = transformPoint(min[0], max[1], max[2]);
-            const c111 = transformPoint(max[0], max[1], max[2]);
+            const c000 = [min[0], min[1], min[2]] as [number, number, number];
+            const c100 = [max[0], min[1], min[2]] as [number, number, number];
+            const c010 = [min[0], max[1], min[2]] as [number, number, number];
+            const c110 = [max[0], max[1], min[2]] as [number, number, number];
+            const c001 = [min[0], min[1], max[2]] as [number, number, number];
+            const c101 = [max[0], min[1], max[2]] as [number, number, number];
+            const c011 = [min[0], max[1], max[2]] as [number, number, number];
+            const c111 = [max[0], max[1], max[2]] as [number, number, number];
 
             addEdge(c000, c100); addEdge(c100, c110);
             addEdge(c110, c010); addEdge(c010, c000);

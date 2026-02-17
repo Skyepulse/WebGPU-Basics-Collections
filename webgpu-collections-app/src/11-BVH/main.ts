@@ -31,7 +31,7 @@ export async function startup_11(canvas: HTMLCanvasElement)
 
 //================================//
 const normalUniformDataSize = (16 * 2) * 4 + (2 * 4) * 4 + (48 * 3);
-const rayTracerUniformDataSize = 224 + 16*4;
+const rayTracerUniformDataSize = 224 + 16*4 + 16;
 const meshInstanceSize = 20 * 4; // 16 byte matrix, + 4 floats
 
 //================================//
@@ -135,6 +135,7 @@ class RayTracer
     private showBVH: boolean = false;
     private bvhDepth: number = Infinity;
     private rayTracerMode: RayTracerMode = RayTracerMode.raytrace;
+    private numBounces: number = 3;
 
     //================================//
     constructor () 
@@ -150,7 +151,7 @@ class RayTracer
 
         const light1 = {
             position: glm.vec3.fromValues(500, 500.0, 0),
-            intensity: 1000.0,
+            intensity: 5000.0,
             direction: glm.vec3.fromValues(-0.5, -0.9, 1),
             coneAngle: Math.PI / 6,
             color: glm.vec3.fromValues(0.85, 0.1, 0.1),
@@ -160,7 +161,7 @@ class RayTracer
 
         const light2 = {
             position: glm.vec3.fromValues(50, 500.0, 0), 
-            intensity: 1000.0,
+            intensity: 5000.0,
             direction: glm.vec3.fromValues(0.5, -0.9, 1),
             coneAngle: Math.PI / 6,
             color: glm.vec3.fromValues(0.1, 0.85, 0.1),
@@ -170,9 +171,9 @@ class RayTracer
 
         const light3 = {
             position: glm.vec3.fromValues(275, 255, 0),
-            intensity: 1500.0,
+            intensity: 10000.0,
             direction: glm.vec3.fromValues(0, 0, 1),
-            coneAngle: Math.PI / 6,
+            coneAngle: Math.PI / 3,
             color: glm.vec3.fromValues(0.9, 0.9, 0.9),
             enabled: true
         };
@@ -186,6 +187,9 @@ class RayTracer
         if (!utilElement) return;
 
         addCheckbox('Use Ray Tracing', this.useRaytracing, utilElement, (value) => { this.useRaytracing = value; });
+        utilElement.appendChild(document.createElement('br'));
+        
+        addSlider('Number of Bounces', this.numBounces, 0, 20, 1, utilElement, (value) => { this.numBounces = value; });
         utilElement.appendChild(document.createElement('br'));
 
         this.lights.forEach((_, index) =>
@@ -1013,6 +1017,11 @@ class RayTracer
             floatView[22] = this.a_q;
             floatView[23] = this.bvhDepth;
 
+            uintView[24] = this.numBounces;
+            floatView[25] = 0.0;
+            floatView[26] = 0.0;
+            floatView[27] = 0.0;
+
             // All lights
             for (let i = 0; i < 3; i++)
             {
@@ -1020,7 +1029,7 @@ class RayTracer
                     break;
 
                 const light = this.lights[i];
-                const baseIndex = 24 + i * 12; // Each light is in total 48 bytes, 12 floats
+                const baseIndex = 28 + i * 12; // Each light is in total 48 bytes, 12 floats
 
                 floatView.set(light.position, baseIndex);
                 floatView[baseIndex + 3] = light.intensity;
@@ -1070,7 +1079,7 @@ class RayTracer
     //================================//
     animate()
     {
-        const meshIndex = 4;
+        const meshIndex = 5;
         if (meshIndex >= this.normalObjects.sceneInformation.meshes.length) return;
 
         const mesh = this.normalObjects.sceneInformation.meshes[meshIndex];

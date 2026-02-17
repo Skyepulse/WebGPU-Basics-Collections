@@ -1401,7 +1401,8 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
 {   
     const Meshes: Mesh[] = [];
 
-    Meshes.push(new Mesh("white wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "whiteWall" })));
+    Meshes.push(new Mesh("white wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "whiteWall", metalness: 1.0, roughness: 0.0 })));
+    Meshes.push(new Mesh("Back Wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "backWall", metalness: 0.3, roughness: 0.6 })));
     Meshes.push(new Mesh("red wall", createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall" })));
     Meshes.push(new Mesh("green wall", createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall" })));
     Meshes.push(new Mesh("light", createDefaultMaterial({ albedo: [1.0, 1.0, 1.0], roughness: 0.0, name: "light" })));
@@ -1462,7 +1463,7 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     const lightEpsilon = 1.0;
     const lightY = 548.8 - lightEpsilon;
     addQuad(
-        Meshes[3],
+        Meshes[4],
         glm.vec3.fromValues(343.0, lightY, 227.0),
         glm.vec3.fromValues(343.0, lightY, 332.0),
         glm.vec3.fromValues(213.0, lightY, 332.0),
@@ -1472,7 +1473,7 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     
     // ============== BACK WALL (white) ============== //
     addQuad(
-        Meshes[0],
+        Meshes[1],
         glm.vec3.fromValues(549.6, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 548.8, 559.2),
@@ -1482,7 +1483,7 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     
     // ============== RIGHT WALL (green) ============== //
     addQuad(
-        Meshes[2],
+        Meshes[3],
         glm.vec3.fromValues(0.0, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 0.0, 0.0),
         glm.vec3.fromValues(0.0, 548.8, 0.0),
@@ -1492,7 +1493,7 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     
     // ============== LEFT WALL (red) ============== //
     addQuad(
-        Meshes[1],
+        Meshes[2],
         glm.vec3.fromValues(552.8, 0.0, 0.0),
         glm.vec3.fromValues(549.6, 0.0, 559.2),
         glm.vec3.fromValues(556.0, 548.8, 559.2),
@@ -1520,10 +1521,10 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     return {
         meshes: Meshes,
         additionalInfo: {
-            meshIndices: [4],
-            meshTransforms: [Meshes[4].GetTransform()],
+            meshIndices: [5],
+            meshTransforms: [Meshes[5].GetTransform()],
             meshMaterials: [
-                Meshes[4].GetMaterial(), // dragon
+                Meshes[5].GetMaterial(), // dragon
             ]
         }
     };

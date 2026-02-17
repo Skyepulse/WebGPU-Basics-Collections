@@ -24,6 +24,11 @@ struct Uniform
     a_q: f32,
     bvhVisualizationDepth: f32,
 
+    numBounces: u32,
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
+
     lights: array<SpotLight, 3>, // 48 * 3 = 144 bytes
 }; // Total: 224 bytes
 
@@ -113,7 +118,6 @@ struct VertexOutput
 @group(1) @binding(1) var materialSampler: sampler;
 @group(1) @binding(2) var textures: texture_2d_array<f32>; // (albedo -> metalness -> roughness -> normal) for each material
 
-// Helper function to read a vec3 from the flat array
 // ============================== //
 fn getVertex(index: u32) -> vec3f 
 {
@@ -451,6 +455,130 @@ fn getHitPosition(ray: Ray, distance: f32) -> vec3f
 }
 
 // ============================== //
+fn reflectRay(direction: vec3f, normal: vec3f) -> vec3f
+{
+    return direction - 2.0 * dot(direction, normal) * normal;
+}
+
+// ============================== //
+fn getMaterialProperties(material: Material, uv: vec2f) -> vec3f
+{
+    var roughness = material.roughness;
+    if (material.usePerlinRoughness > 0.5)
+    {
+        let perlinRoughness = fbmPerlin2D(uv * 5.0, material.perlinFreq, 0.5, 4, 2.0, 0.5);
+        roughness = clamp(perlinRoughness * 0.5 + 0.5, 0.0, 1.0);
+    }
+    if (material.useRoughnessTexture > 0.5 && material.textureIndex >= 0.0)
+    {
+        roughness = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 2.0).g;
+    }
+    roughness = max(roughness, 0.001);
+
+    var metalness = material.metalness;
+    if (material.usePerlinMetalness > 0.5)
+    {
+        let perlinMetalness = fbmPerlin2D(uv * 5.0 + vec2f(5.2, 1.3), material.perlinFreq, 0.5, 4, 2.0, 0.5);
+        metalness = clamp(perlinMetalness * 0.5 + 0.5, 0.0, 1.0);
+    }
+    if (material.useMetalnessTexture > 0.5 && material.textureIndex >= 0.0)
+    {
+        metalness = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 1, 2.0).r;
+    }
+
+    return vec3f(metalness, roughness, 0.0);
+}
+
+// ============================== //
+fn rayTraceWithBounces(initialRay: Ray, maxBounces: u32) -> vec3f
+{
+    var currentRay = initialRay;
+    let reflectanceEpsilon: f32 = 0.01;
+    let maxDistance: f32 = 2000.0;
+
+    // 1. Primary ray
+    var hit: Hit;
+    if (!rayTraceOnce(currentRay, &hit, maxDistance, false))
+    {
+        return vec3f(0.0, 0.0, 0.0); // No hit, return black
+    }
+
+    // 2. In case we hit something
+    var primaryHit: Hit = hit;
+    let primaryHitPos = getHitPosition(currentRay, primaryHit.distance);
+    let material = getMaterial(primaryHit.instanceIndex);
+
+    let matProps = getMaterialProperties(material, primaryHit.uvAtHit);
+    let metalness = matProps.x;
+    let roughness = matProps.y;
+
+    // TODO: better reflectance model?
+    let reflectance = metalness * (1.0 - roughness * 0.5);
+    if (reflectance < reflectanceEpsilon)
+    {
+        return computeMicrofacetBRDF(primaryHitPos, primaryHit.normalAtHit, material, primaryHit.uvAtHit);
+    }
+
+    var primaryShadedColor = vec3f(0.0, 0.0, 0.0);
+    if (reflectance < 1.0)
+    {
+        primaryShadedColor = computeMicrofacetBRDF(primaryHitPos, primaryHit.normalAtHit, material, primaryHit.uvAtHit);
+    }
+
+    // 3. Accumulate reflectancies
+    var accumulatedReflectance: f32 = reflectance;
+    var reflectedColor = vec3f(0.0, 0.0, 0.0);
+
+    let reflectedDir = reflectRay(currentRay.direction, primaryHit.normalAtHit);
+    currentRay.origin = primaryHitPos + primaryHit.normalAtHit * 0.001; // EPSILON for avoidance of self intersection
+    currentRay.direction = reflectedDir;
+
+    for (var bounce: u32 = 0u; bounce < maxBounces; bounce = bounce + 1u)
+    {
+        var bounceHit: Hit;
+        if (!rayTraceOnce(currentRay, &bounceHit, maxDistance, false))
+        {
+            break;
+        }
+
+        let bounceHitPos = getHitPosition(currentRay, bounceHit.distance);
+        let bounceHitNormal = bounceHit.normalAtHit;
+        let bounceMaterial = getMaterial(bounceHit.instanceIndex);
+
+        let bounceMatProps = getMaterialProperties(bounceMaterial, bounceHit.uvAtHit);
+        let bounceMetalness = bounceMatProps.x;
+        let bounceRoughness = bounceMatProps.y;
+        let bounceReflectance = bounceMetalness * (1.0 - bounceRoughness * 0.5);
+
+        let distanceAttenuation = 1.0 / (1.0 + bounceHit.distance * 0.01);
+
+        var bounceShadedColor = vec3f(0.0, 0.0, 0.0);
+        if (bounceReflectance < 1.0)
+        {
+            bounceShadedColor = computeMicrofacetBRDF(bounceHitPos, bounceHitNormal, bounceMaterial, bounceHit.uvAtHit);
+        }
+
+        // (1 - bounceReflectance) for own albedo
+        let colorContribution = (1.0 - bounceReflectance) * bounceShadedColor * distanceAttenuation;
+        reflectedColor = reflectedColor + colorContribution * accumulatedReflectance;
+        accumulatedReflectance = accumulatedReflectance * bounceReflectance;
+
+        if (accumulatedReflectance < reflectanceEpsilon)
+        {
+            break;
+        }
+
+        let newReflectedDir = reflectRay(currentRay.direction, bounceHitNormal);
+        currentRay.origin = bounceHitPos + bounceHitNormal * 0.001;
+        currentRay.direction = newReflectedDir;
+    }
+
+    let finalColor = (1.0 - reflectance) * primaryShadedColor + reflectedColor;
+
+    return finalColor;
+}
+
+// ============================== //
 fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: vec2f) -> vec3f
 {
     var albedo = material.albedo;
@@ -660,17 +788,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
 
     if (uniforms.mode == 0u)
     {
-        if (rayTraceOnce(ray, &hit, maxDistance, false))
-        {
-            let hitPos = getHitPosition(ray, hit.distance);
-            let material = getMaterial(hit.instanceIndex);
-            //color = computeLambertShading(hitPos, hit.normalAtHit, material.albedo);
-            color = computeMicrofacetBRDF(hitPos, hit.normalAtHit, material, hit.uvAtHit);
-        }
-        else
-        {
-            color = vec3f(0.0, 0.0, 0.0);
-        }
+        color = rayTraceWithBounces(ray, uniforms.numBounces);
     }
     else if (uniforms.mode == 2u)
     {

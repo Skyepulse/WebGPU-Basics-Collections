@@ -108,6 +108,7 @@ export async function loadMesh(url: string) : Promise<Mesh>
             }
         }
 
+        console.log(`Loaded mesh "${meshName}" with ${mesh.getNumVertices()} vertices and ${mesh.getNumTriangles()} triangles.`);
         return mesh;
     }
     catch (error)

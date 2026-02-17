@@ -1409,7 +1409,10 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     const dragonMaterial = meshMaterials.find(mat => mat.name === "dragon") || createDefaultMaterial({
         albedo: [0.12, 0.45, 0.15],
         name: "dragon",
-        textureIndex: 0
+        textureIndex: 0,
+        useAlbedoTexture: true,
+        useRoughnessTexture: true,
+        useMetalnessTexture: true
     });
     
     //================================//

@@ -1537,7 +1537,6 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     Meshes.push(new Mesh("Back Wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "backWall" })));
     Meshes.push(new Mesh("red wall", createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall" })));
     Meshes.push(new Mesh("green wall", createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall" })));
-    Meshes.push(new Mesh("light", createDefaultMaterial({ albedo: [1.0, 1.0, 1.0], roughness: 0.0, name: "light" })));
     
     const cube1 = meshMaterials.find(mat => mat.name === "cube1") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
@@ -1659,18 +1658,6 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
         false,
     );
     
-    // ============== LIGHT (slightly below ceiling) ============== //
-    const lightEpsilon = 1.0;
-    const lightY = 548.8 - lightEpsilon;
-    addQuad(
-        Meshes[4],
-        glm.vec3.fromValues(343.0, lightY, 227.0),
-        glm.vec3.fromValues(343.0, lightY, 332.0),
-        glm.vec3.fromValues(213.0, lightY, 332.0),
-        glm.vec3.fromValues(213.0, lightY, 227.0),
-        false,
-    );
-    
     // ============== BACK WALL (white) ============== //
     addQuad(
         Meshes[1],
@@ -1727,8 +1714,8 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     return {
         meshes: Meshes,
         additionalInfo: {
-            meshIndices: [5, 6],
-            meshTransforms: [Meshes[5].GetTransform(), Meshes[6].GetTransform()],
+            meshIndices: [4, 5],
+            meshTransforms: [Meshes[4].GetTransform(), Meshes[5].GetTransform()],
             meshMaterials: [
                 cube1,
                 cube2

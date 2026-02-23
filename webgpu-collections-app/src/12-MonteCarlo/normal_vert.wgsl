@@ -1,20 +1,25 @@
-struct SpotLight
+struct AreaLight
 {
-    position: vec3f,
+    center: vec3f,
     intensity: f32,
 
-    direction: vec3f,
-    coneAngle: f32,
+    normalDirection: vec3f,
+    width: f32,
 
     color: vec3f,
+    height: f32,
+
+    enabled: f32,
     _pad: f32,
-}; // 48 bytes
+    _pad2: f32,
+    _pad3: f32,
+}; // 4 * 4 = 64 bytes
 
 struct Uniforms {
-    viewMat : mat4x4<f32>,
-    projMat : mat4x4<f32>,
+    viewMat : mat4x4<f32>, // 64 bytes
+    projMat : mat4x4<f32>, // 64 bytes
 
-    cameraPosition: vec3f,
+    cameraPosition: vec3f, 
     _pad0: f32,
 
     a_c: f32,
@@ -22,8 +27,8 @@ struct Uniforms {
     a_q: f32,
     _pad2: f32,
 
-    lights : array<SpotLight, 3>,
-};
+    light : AreaLight,
+}; // 64 + 64 + 16 + 16 + 64 = 224 bytes
 
 @group(0) @binding(0)
 var<uniform> uniforms : Uniforms;

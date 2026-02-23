@@ -18,22 +18,28 @@ struct Material {
     _pad2: f32,
 }; // Total: 64  bytes
 
-struct SpotLight
+struct AreaLight
 {
-    position: vec3f,
+    center: vec3f,
     intensity: f32,
 
-    direction: vec3f,
-    coneAngle: f32,
+    normalDirection: vec3f,
+    width: f32,
 
     color: vec3f,
-    enabled: f32,
-};
-struct Uniforms {
-    viewMat : mat4x4<f32>,
-    projMat : mat4x4<f32>,
+    height: f32,
 
-    cameraPosition: vec3f,
+    enabled: f32,
+    _pad: f32,
+    _pad2: f32,
+    _pad3: f32,
+}; // 4 * 4 = 64 bytes
+
+struct Uniforms {
+    viewMat : mat4x4<f32>, // 64 bytes
+    projMat : mat4x4<f32>, // 64 bytes
+
+    cameraPosition: vec3f, 
     _pad0: f32,
 
     a_c: f32,
@@ -41,8 +47,8 @@ struct Uniforms {
     a_q: f32,
     _pad2: f32,
 
-    lights : array<SpotLight, 3>,
-};
+    light : AreaLight,
+}; // 64 + 64 + 16 + 16 + 64 = 224 bytes
 
 struct VertexOutput {
     @builtin(position) pos : vec4f,
@@ -71,49 +77,9 @@ var normalTexture: texture_2d<f32>;
 @fragment
 fn fs(input: VertexOutput) -> @location(0) vec4f {
     
-    // var totalColor = lambertShading(input);
     var totalColor = microfacetBRDF(input);
 
     return vec4f(totalColor, 1.0);
-}
-
-// ============================== //
-fn lambertShading(input: VertexOutput) -> vec3f
-{
-    var albedo = material.albedo;
-
-    let ka = 0.1;
-    var n = normalize(input.normal);
-
-    var totalColor = ka * albedo;
-
-    for (var i = 0; i < 3; i = i + 1)
-    {
-        if (uniforms.lights[i].enabled < 0.5)
-        {   
-            continue;
-        }
-
-        var toLight = uniforms.lights[i].position - input.position;
-        var lightDistance = length(toLight);
-        var wi = normalize(toLight);
-        
-        // Check if we are in the cone 
-        var lightDir = normalize(uniforms.lights[i].direction);
-        var cosAngle = dot(-wi, lightDir);
-        if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
-        {
-            continue;
-        }
-
-        let NdotL = max(dot(n, wi), 0.0);
-        let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
-        let diffuse = NdotL * lightAttenuation * uniforms.lights[i].intensity * uniforms.lights[i].color * albedo;
-
-        totalColor = totalColor + diffuse;
-    }
-
-    return totalColor;
 }
 
 // ============================== //
@@ -157,73 +123,69 @@ fn microfacetBRDF(input: VertexOutput) -> vec3f
 
     var totalColor = ka * albedo * (1.0 - metalness); // Prepare a small ambient term
 
-    for (var i = 0; i < 3; i = i + 1)
+    if (uniforms.light.enabled < 0.5)
     {
-        if (uniforms.lights[i].enabled < 0.5)
-        {
-            continue;
-        }
-
-        let toLight = uniforms.lights[i].position - input.position;
-        let lightDistance = length(toLight);
-        let wi = normalize(toLight);
-
-        let toCamera = uniforms.cameraPosition - input.position;
-        let wo = normalize(toCamera);
-
-        let wh = normalize(wi + wo);
-
-        // Dot products
-        let NdotV = max(dot(n, wo), 0.0001);
-        let NdotL = max(dot(n, wi), 0.0001);
-        let NdotH = max(dot(n, wh), 0.0);
-        let LdotH = max(dot(wi, wh), 0.0);
-
-        // Check if we are in the cone 
-        var lightDir = normalize(uniforms.lights[i].direction);
-        var cosAngle = dot(-wi, lightDir);
-        if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
-        {
-            continue;
-        }
-
-        // Fade term (we fade as we approach the end of the cone
-        let fade = smoothstep(cos(uniforms.lights[i].coneAngle), cos(uniforms.lights[i].coneAngle) + 0.05, cosAngle);
-
-        // Fresnel term (schlick's approximation)
-        let F0 = mix(vec3(0.04), albedo, metalness);
-        let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
-
-        // f = fd + fs
-        // fd = lambert BRDF
-        // fs = microfacet BRDF = DFG term
-
-        // DIFFUSE
-        let lambert = albedo / pi;
-        let kd = (1.0 - F) * (1.0 - metalness);
-        let fd = kd * lambert;
-
-        // SPECULAR
-
-        // Trowbridge-Reitz Distribution
-        let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
-
-        // Geometry term (GGX)
-        let K = (alphap) * sqrt(2.0 / pi);
-        let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
-        let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
-        let G = G_schlick_wo * G_schlick_wi;
-
-        let EPSILON = 0.0001;
-        let fs = (D * F * G) / (4.0 * NdotL * NdotV + EPSILON);
-
-        let f = fd + fs;
-
-        let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
-        let radiance = uniforms.lights[i].intensity * uniforms.lights[i].color * lightAttenuation;
-
-        totalColor = totalColor + f * radiance * NdotL * fade;
+        return totalColor;
     }
+
+    // ---- Area light: sample the center as a point ----
+    let toLight = uniforms.light.center - input.position;
+    let lightDistance = length(toLight);
+    let wi = normalize(toLight);
+
+    let lightNormal = normalize(uniforms.light.normalDirection);
+    let cosAtLight = dot(-wi, lightNormal);
+    if (cosAtLight <= 0.0)
+    {
+        return totalColor;
+    }
+
+    let toCamera = uniforms.cameraPosition - input.position;
+    let wo = normalize(toCamera);
+    let wh = normalize(wi + wo);
+
+    // Dot products
+    let NdotV = max(dot(n, wo), 0.0001);
+    let NdotL = max(dot(n, wi), 0.0001);
+    let NdotH = max(dot(n, wh), 0.0);
+    let LdotH = max(dot(wi, wh), 0.0);
+
+    // Fresnel term (schlick's approximation)
+    let F0 = mix(vec3(0.04), albedo, metalness);
+    let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
+
+    // f = fd + fs
+    // fd = lambert BRDF
+    // fs = microfacet BRDF = DFG term
+
+    // DIFFUSE
+    let lambert = albedo / pi;
+    let kd = (1.0 - F) * (1.0 - metalness);
+    let fd = kd * lambert;
+
+    // SPECULAR
+
+    // Trowbridge-Reitz Distribution
+    let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
+
+    // Geometry term (GGX)
+    let K = (alphap) * sqrt(2.0 / pi);
+    let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
+    let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
+    let G = G_schlick_wo * G_schlick_wi;
+
+    let EPSILON = 0.0001;
+    let fs = (D * F * G) / (4.0 * NdotL * NdotV + EPSILON);
+
+    let f = fd + fs;
+
+    // Area light radiance:
+    // Power is spread over the light's area, and only the projected area contributes
+    let lightArea = uniforms.light.width * uniforms.light.height;
+    let geometricTerm = cosAtLight / (lightDistance * lightDistance);
+    let radiance = uniforms.light.intensity * uniforms.light.color * geometricTerm * lightArea;
+
+    totalColor = totalColor + f * radiance * NdotL;
 
     return totalColor;
 }

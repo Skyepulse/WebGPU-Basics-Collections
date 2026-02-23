@@ -14,7 +14,7 @@ import bvhFragWGSL from './bvh_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { addButton, addCheckbox, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
+import { addButton, addCheckbox, addSlider, cleanUtilElement, createAreaLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type AreaLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay } from '@src/helpers/CameraHelpers';
 import { createCornellBox4, type Ray, type SceneInformation } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
@@ -30,8 +30,8 @@ export async function startup_12(canvas: HTMLCanvasElement)
 }
 
 //================================//
-const normalUniformDataSize = (16 * 2) * 4 + (2 * 4) * 4 + (48 * 3);
-const rayTracerUniformDataSize = 224 + 16*4 + 16 + 16;
+const normalUniformDataSize = 224;
+const rayTracerUniformDataSize = 192;
 const meshInstanceSize = 20 * 4; // 16 byte matrix, + 4 floats
 
 //================================//
@@ -117,7 +117,7 @@ class RayTracer
 
     //================================//
     private camera = createCamera(1.0);
-    private lights: SpotLight[] = [];
+    private lights: AreaLight[] = [];
     private a_c: number = 1.0;
     private a_l: number = 0.09;
     private a_q: number = 0.0032;
@@ -139,6 +139,7 @@ class RayTracer
     private ptSamples: number = 1;
     private randSeed: number = Math.floor(Math.random() * 0xFFFFFFFF);
     private russianRoulette: boolean = true;
+    private sampleCosine: boolean = true;
 
     //================================//
     constructor () 
@@ -152,36 +153,16 @@ class RayTracer
         this.normalObjects = {} as normalObjects;
         this.rayTracerObjects = {} as rayTracerObjects;
 
-        const light1 = {
-            position: glm.vec3.fromValues(500, 500.0, 0),
-            intensity: 5000.0,
-            direction: glm.vec3.fromValues(-0.5, -0.9, 1),
-            coneAngle: Math.PI / 6,
-            color: glm.vec3.fromValues(0.85, 0.1, 0.1),
-            enabled: false
-        };
-        this.lights.push(light1);
-
-        const light2 = {
-            position: glm.vec3.fromValues(50, 500.0, 0), 
-            intensity: 5000.0,
-            direction: glm.vec3.fromValues(0.5, -0.9, 1),
-            coneAngle: Math.PI / 6,
-            color: glm.vec3.fromValues(0.1, 0.85, 0.1),
-            enabled: false
-        };
-        this.lights.push(light2);
-
-        const light3 = {
-            // Cube center
-            position: glm.vec3.fromValues(278, 500, 279),
-            intensity: 10000.0,
-            direction: glm.vec3.fromValues(0, -1, 0),
-            coneAngle: Math.PI / 3,
-            color: glm.vec3.fromValues(0.9, 0.9, 0.9),
+        const light = {
+            center: glm.vec3.fromValues(278, 548, 279),
+            intensity: 40.0,
+            normalDirection: glm.vec3.fromValues(0, -1, 0),
+            width: 130,
+            height: 105,
+            color: glm.vec3.fromValues(1, 1, 1),
             enabled: true
         };
-        this.lights.push(light3);
+        this.lights.push(light);
     }
 
     //================================//
@@ -197,7 +178,9 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
         addSlider('Path tracing samples', this.ptSamples, 1, 100, 1, utilElement, (value) => { this.ptSamples = value; });
 
+        utilElement.appendChild(document.createElement('br'));
         addCheckbox('Russian Roulette', this.russianRoulette, utilElement, (value) => { this.russianRoulette = value; });
+        addCheckbox('Sample Cosine', this.sampleCosine, utilElement, (value) => { this.sampleCosine = value; });
 
         this.lights.forEach((_, index) =>
         {
@@ -212,7 +195,7 @@ class RayTracer
                     x: (this.canvas!.offsetLeft + this.canvas!.width - 300) ,
                     y: (this.canvas!.offsetTop + this.canvas!.height / 2 - 150)
                 };
-                this.activeContextMenu = createLightContextMenu(middleOfCanvas, this.lights[index], `Edit Light ${index + 1}`, 
+                this.activeContextMenu = createAreaLightContextMenu(middleOfCanvas, this.lights[index], `Edit Light ${index + 1}`, 
                     (newLight) => { this.lights[index] = newLight; },
                     () => { this.activeContextMenu?.remove(); this.activeContextMenu = null; }
                 );
@@ -1021,32 +1004,24 @@ class RayTracer
             uintView[24] = this.ptDepth;
             uintView[25] = this.randSeed;
             uintView[26] = this.ptSamples;
-            uintView[27] = this.russianRoulette ? 1 : 0;
+            floatView[27] = this.russianRoulette ? 1 : 0;
 
             const canvasDimensions = new Float32Array([this.canvas!.width, this.canvas!.height]);
             floatView.set(canvasDimensions, 28);
-            floatView[30] = 0.0; // pad
+            floatView[30] = this.sampleCosine ? 1 : 0;
             floatView[31] = 0.0; // pad
 
-            // All lights
-            for (let i = 0; i < 3; i++)
-            {
-                if (i >= this.lights.length)
-                    break;
-
-                const light = this.lights[i];
-                const baseIndex = 32 + i * 12; // Each light is in total 48 bytes, 12 floats
-
-                floatView.set(light.position, baseIndex);
-                floatView[baseIndex + 3] = light.intensity;
-
-                floatView.set(light.direction, baseIndex + 4);
-                floatView[baseIndex + 7] = light.coneAngle;
-
-                floatView.set(light.color, baseIndex + 8);
-                floatView[baseIndex + 11] = light.enabled ? 1.0 : 0.0;
-                // pad
-            }
+            // Area light
+            floatView.set(this.lights[0].center, 32);
+            floatView[35] = this.lights[0].intensity;
+            floatView.set(this.lights[0].normalDirection, 36);
+            floatView[39] = this.lights[0].width;
+            floatView.set(this.lights[0].color, 40);
+            floatView[43] = this.lights[0].height;
+            floatView[44] = this.lights[0].enabled ? 1 : 0;
+            floatView[45] = 0.0; // pad
+            floatView[46] = 0.0;
+            floatView[47] = 0.0;
             this.device.queue.writeBuffer(this.rayTracerObjects.uniformBuffer, 0, data);
         }
         else
@@ -1061,23 +1036,16 @@ class RayTracer
             floatView[38] = this.a_q;
             floatView[39] = 0.0; // pad
 
-            for (let i = 0; i < 3; i++)
-            {
-                if (i >= this.lights.length)
-                    break;
-
-                const light = this.lights[i];
-                const baseIndex = 40 + i * 12;
-
-                floatView.set(light.position, baseIndex);
-                floatView[baseIndex + 3] = light.intensity;
-
-                floatView.set(light.direction, baseIndex + 4);
-                floatView[baseIndex + 7] = light.coneAngle;
-
-                floatView.set(light.color, baseIndex + 8);
-                floatView[baseIndex + 11] = light.enabled ? 1.0 : 0.0;
-            }
+            floatView.set(this.lights[0].center, 40);
+            floatView[43] = this.lights[0].intensity;
+            floatView.set(this.lights[0].normalDirection, 44);
+            floatView[47] = this.lights[0].width;
+            floatView.set(this.lights[0].color, 48);
+            floatView[51] = this.lights[0].height;
+            floatView[52] = this.lights[0].enabled ? 1 : 0;
+            floatView[53] = 0; // pad
+            floatView[54] = 0;
+            floatView[55] = 0;
             this.device.queue.writeBuffer(this.normalObjects.uniformBuffer, 0, data as BufferSource);
         }
     }

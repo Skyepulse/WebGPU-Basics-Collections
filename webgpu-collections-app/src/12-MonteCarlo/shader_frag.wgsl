@@ -1,40 +1,45 @@
 // ============================== //
-struct SpotLight
+struct AreaLight
 {
-    position: vec3f,
+    center: vec3f,
     intensity: f32,
 
-    direction: vec3f,
-    coneAngle: f32,
+    normalDirection: vec3f,
+    width: f32,
 
     color: vec3f,
+    height: f32,
+
     enabled: f32,
-};
+    _pad: f32,
+    _pad2: f32,
+    _pad3: f32,
+}; // 4 * 4 = 64 bytes
 
 // ============================== //
 struct Uniform
 {
-    pixelToRayMatrix: mat4x4<f32>,
+    pixelToRayMatrix: mat4x4<f32>, // 64 bytes
 
-    cameraPosition: vec3f,
+    cameraPosition: vec3f, // 16
     mode: u32, 
 
-    a_c: f32,
+    a_c: f32,   // 16
     a_l: f32,
     a_q: f32,
     bvhVisualizationDepth: f32,
 
-    ptDepth: u32,
+    ptDepth: u32, // 16
     frameSeed: u32,
     numSamples: u32,
-    roulette: u32,
+    roulette: f32,
 
-    canvasDimensions: vec2f,
-    pad2: u32,
-    pad3: u32,
+    canvasDimensions: vec2f, // 16
+    sampleCosine: f32,  
+    pad3: f32,
 
-    lights: array<SpotLight, 3>,
-};
+    light: AreaLight, // 64 bytes
+}; // Total: 64 + 16 + 16 + 16 + 16 + 64 = 192 bytes
 
 struct Material {
     albedo : vec3<f32>,
@@ -159,6 +164,29 @@ fn sampleHemisphereUniform(normal: vec3f) -> vec3f
     let bitangent = cross(normal, tangent);
 
     return normalize(tangent * localDir.x + bitangent * localDir.y + normal * localDir.z);
+}
+
+// ============================== //
+fn sampleUniformCosine(normal: vec3f) -> vec3f
+{
+    let a = rand();
+    let b = rand();
+    let pi = 3.14159265359;
+
+    let dist1 = cos(2.0 * pi * a) * sqrt(b);
+    let dist2 = sin(2.0 * pi * a) * sqrt(b);
+    let dist3 = sqrt(1.0 - b);
+
+    var up = vec3f(0.0, 1.0, 0.0);
+    if (abs(normal.y) > 0.999) 
+    {
+        up = vec3f(1.0, 0.0, 0.0);
+    }
+
+    let tangent = normalize(cross(up, normal));
+    let bitangent = cross(normal, tangent);
+
+    return normalize(tangent * dist1 + bitangent * dist2 + normal * dist3);
 }
 
 // ============================== //
@@ -556,7 +584,16 @@ fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
             albedo = textureSampleLevel(textures, materialSampler, hit.uvAtHit, i32(mat.textureIndex) * 4, 2.0).rgb;
         }
 
-        let newDir = sampleHemisphereUniform(normal);
+        var newDir: vec3f;
+        if (uniforms.sampleCosine > 0.5)
+        {
+            newDir = sampleUniformCosine(normal);
+        }
+        else
+        {
+            newDir = sampleHemisphereUniform(normal);
+        }
+
         let cosTheta = max(dot(newDir, normal), 0.0);
 
         // Lambert BRDF = albedo / pi
@@ -565,7 +602,7 @@ fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
         throughput *= 2.0 * albedo * cosTheta;
 
         // RUSSIAN ROULETTE
-        if (depth >= 2u && uniforms.roulette > 0u)
+        if (depth >= 2u && uniforms.roulette > 0.5)
         {
             let pSurvive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
             if (rand() > pSurvive)
@@ -601,73 +638,91 @@ fn computeDirectLighting(hitPos: vec3f, normal: vec3f, material: Material, uv: v
     let pi = 3.14159265359;
 
     var totalColor = vec3f(0.0, 0.0, 0.0);
-    for (var i = 0; i < 3; i = i + 1)
+
+    if (uniforms.light.enabled < 0.5)
     {
-        if (uniforms.lights[i].enabled < 0.5)
-        {
-            continue;
-        }
-
-        let toLight = uniforms.lights[i].position - hitPos;
-        let lightDistance = length(toLight);
-        let wi = normalize(toLight);
-
-        let toCamera = uniforms.cameraPosition - hitPos;
-        let wo = normalize(toCamera);
-
-        let wh = normalize(wi + wo);
-
-        let NdotV = max(dot(n, wo), 0.0001);
-        let NdotL = max(dot(n, wi), 0.0001);
-        let NdotH = max(dot(n, wh), 0.0);
-        let LdotH = max(dot(wi, wh), 0.0);
-
-        var lightDir = normalize(uniforms.lights[i].direction);
-        var cosAngle = dot(-wi, lightDir);
-        if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
-        {
-            continue;
-        }
-
-        const shadowBias = 0.0001;
-        var shadowRay: Ray;
-        shadowRay.origin = hitPos + shadowBias * normal;
-        shadowRay.direction = wi;
-
-        var shadowHit: Hit;
-        let inShadow = rayTraceOnce(shadowRay, &shadowHit, lightDistance, true);
-    
-        if (inShadow && shadowHit.distance < lightDistance)
-        {
-            continue;
-        }
-
-        let fade = smoothstep(cos(uniforms.lights[i].coneAngle), cos(uniforms.lights[i].coneAngle) + 0.05, cosAngle);
-
-        let F0 = mix(vec3(0.04), albedo, metalness);
-        let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
-
-        let lambert = albedo / pi;
-        let kd = (1.0 - F) * (1.0 - metalness);
-        let fd = kd * lambert;
-
-        let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
-
-        let K = (alphap) * sqrt(2.0 / pi);
-        let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
-        let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
-        let G = G_schlick_wo * G_schlick_wi;
-
-        let EPSILON = 0.0001;
-        let fs = (D * F * G) / (4.0 * NdotL * NdotV + EPSILON);
-
-        let f = fd + fs;
-
-        let lightAttenuation = 1.0 / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
-        let radiance = uniforms.lights[i].intensity * uniforms.lights[i].color * lightAttenuation;
-
-        totalColor = totalColor + f * radiance * NdotL * fade;
+        return totalColor;
     }
+
+    let lightNormal = normalize(uniforms.light.normalDirection);
+    var lightUp = vec3f(0.0, 0.0, 1.0);
+    if (abs(lightNormal.z) > 0.999) 
+    {
+        lightUp = vec3f(1.0, 0.0, 0.0);
+    }
+    let lightTangent = normalize(cross(lightUp, lightNormal));
+    let lightBitangent = cross(lightNormal, lightTangent);
+
+    let u = rand() - 0.5;
+    let v = rand() - 0.5;
+    let samplePoint = uniforms.light.center 
+                    + lightTangent * u * uniforms.light.width 
+                    + lightBitangent * v * uniforms.light.height;
+
+    let toLight = samplePoint - hitPos;
+    let lightDistance = length(toLight);
+    let wi = normalize(toLight);
+
+    // Check: is the shading point on the emitting side?
+    let cosAtLight = dot(-wi, lightNormal);
+    if (cosAtLight <= 0.0)
+    {
+        return totalColor;
+    }
+
+    // Check: does the surface face the light?
+    let NdotL = dot(n, wi);
+    if (NdotL <= 0.0)
+    {
+        return totalColor;
+    }
+
+    // Check: is the point in shadow?
+    const shadowBias = 0.001;
+    var shadowRay: Ray;
+    shadowRay.origin = hitPos + shadowBias * n;
+    shadowRay.direction = wi;
+
+    var shadowHit: Hit;
+    let inShadow = rayTraceOnce(shadowRay, &shadowHit, lightDistance - shadowBias, true);
+    if (inShadow)
+    {
+        return totalColor;
+    }
+
+    let toCamera = uniforms.cameraPosition - hitPos;
+    let wo = normalize(toCamera);
+    let wh = normalize(wi + wo);
+
+    let NdotV = max(dot(n, wo), 0.0001);
+    let NdotH = max(dot(n, wh), 0.0);
+    let LdotH = max(dot(wi, wh), 0.0);
+
+    let F0 = mix(vec3(0.04), albedo, metalness);
+    let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
+
+    let lambert = albedo / pi;
+    let kd = (1.0 - F) * (1.0 - metalness);
+    let fd = kd * lambert;
+
+    let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
+
+    let K = (alphap) * sqrt(2.0 / pi);
+    let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
+    let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
+    let G = G_schlick_wo * G_schlick_wi;
+
+    let EPSILON = 0.0001;
+    let fs = (D * F * G) / (4.0 * NdotL * NdotV + EPSILON);
+
+    let f = fd + fs;
+
+    // Monte carlo area light PDF estimate
+    let lightArea = uniforms.light.width * uniforms.light.height;
+    let geometricTerm = cosAtLight / (lightDistance * lightDistance);
+    let radiance = uniforms.light.intensity * uniforms.light.color;
+
+    totalColor = f * radiance * NdotL * geometricTerm * lightArea;
 
     return totalColor;
 }

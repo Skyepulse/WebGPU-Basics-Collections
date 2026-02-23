@@ -9,28 +9,32 @@ struct SpotLight
 
     color: vec3f,
     enabled: f32,
-}; // Total : 48 bytes
+};
 
 // ============================== //
 struct Uniform
 {
-    pixelToRayMatrix: mat4x4<f32>, // 4 * 4 * 4 = 64 bytes
+    pixelToRayMatrix: mat4x4<f32>,
 
     cameraPosition: vec3f,
-    mode: u32,              // 16 bytes
+    mode: u32, 
 
     a_c: f32,
     a_l: f32,
     a_q: f32,
     bvhVisualizationDepth: f32,
 
-    numBounces: u32,
-    pad1: u32,
+    ptDepth: u32,
+    frameSeed: u32,
+    numSamples: u32,
+    roulette: u32,
+
+    canvasDimensions: vec2f,
     pad2: u32,
     pad3: u32,
 
-    lights: array<SpotLight, 3>, // 48 * 3 = 144 bytes
-}; // Total: 224 bytes
+    lights: array<SpotLight, 3>,
+};
 
 struct Material {
     albedo : vec3<f32>,
@@ -51,11 +55,6 @@ struct Material {
     _pad1: f32,
     _pad2: f32,
 };
-
-// MODE FOLLOWS:
-// 0 - normal shading
-// 1 - normals
-// 2 - distance
 
 // ============================== //
 struct Ray 
@@ -97,7 +96,7 @@ struct MeshInstance
     vertOffset: u32,
     matIndex: u32,
 
-}; // Total: 16 * 4 + 4 * 4 = 80 bytes
+};
 
 // ============================== //
 struct VertexOutput 
@@ -107,7 +106,7 @@ struct VertexOutput
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniform;
-@group(0) @binding(1) var<storage, read> vertices: array<f32>; // vec3f does not work here cause would expect a 16 byte alignment
+@group(0) @binding(1) var<storage, read> vertices: array<f32>;
 @group(0) @binding(2) var<storage, read> normals: array<f32>;
 @group(0) @binding(3) var<storage, read> uvs: array<f32>;
 @group(0) @binding(4) var<storage, read> indices: array<u32>;
@@ -116,7 +115,51 @@ struct VertexOutput
 
 @group(1) @binding(0) var<storage, read> materials: array<f32>;
 @group(1) @binding(1) var materialSampler: sampler;
-@group(1) @binding(2) var textures: texture_2d_array<f32>; // (albedo -> metalness -> roughness -> normal) for each material
+@group(1) @binding(2) var textures: texture_2d_array<f32>;
+
+var<private> rngState: u32;
+
+// ============================== //
+fn initRNG(pixel: vec2f, sampleIndex: u32) 
+{
+    rngState = u32(pixel.x) * 1973u 
+             + u32(pixel.y) * 9277u 
+             + sampleIndex * 26699u 
+             + uniforms.frameSeed;
+}
+
+// ============================== //
+fn rand() -> f32 
+{
+    rngState = rngState * 747796405u + 2891336453u;
+    let word = ((rngState >> ((rngState >> 28u) + 4u)) ^ rngState) * 277803737u;
+    rngState = (word >> 22u) ^ word;
+    return f32(rngState) / 4294967295.0;
+}
+
+// ============================== //
+// TODO: better sampling strategy, and pass seed in Uniform
+fn sampleHemisphereUniform(normal: vec3f) -> vec3f 
+{
+    let r1 = rand();
+    let r2 = rand();
+    let pi = 3.14159265359;
+
+    let phi = 2.0 * pi * r1;
+    let cosTheta = r2;
+    let sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    let localDir = vec3f(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+
+    var up = vec3f(0.0, 1.0, 0.0);
+    if (abs(normal.y) > 0.999) {
+        up = vec3f(1.0, 0.0, 0.0);
+    }
+    let tangent = normalize(cross(up, normal));
+    let bitangent = cross(normal, tangent);
+
+    return normalize(tangent * localDir.x + bitangent * localDir.y + normal * localDir.z);
+}
 
 // ============================== //
 fn getVertex(index: u32) -> vec3f 
@@ -143,7 +186,7 @@ fn getUV(index: u32) -> vec2f
 fn getMaterial(instance: u32) -> Material
 {
     let meshInstance = meshInstances[instance];
-    let materialIndex = meshInstance.matIndex; // Which material are we talking about ?
+    let materialIndex = meshInstance.matIndex;
     let baseIndex = materialIndex * 16u;
 
     var mat: Material;
@@ -185,15 +228,11 @@ fn rayTriangleIntersect(ray: Ray, triIndex: u32, hitCoord: ptr<function, vec3f>)
 
     let kEpsilon: f32 = 0.000001;
 
-    // culling or not, we do or don't compare absolute value of det
     if (det < kEpsilon) 
     {
-        return false; // No intersection
+        return false;
     }
 
-    // compute u. reject if u not in [0,1]
-    // then v, same check and reject if u+v > 1
-    // if met, compute t to get intersection point we know there is intersection
     let invDet: f32 = 1.0 / det;
     let tvec: vec3f = ray.origin - v0;
 
@@ -212,7 +251,7 @@ fn rayTriangleIntersect(ray: Ray, triIndex: u32, hitCoord: ptr<function, vec3f>)
 
     let t = dot(e1, qvec) * invDet;
 
-    if (t < kEpsilon)  // behind camera
+    if (t < kEpsilon)
     {
         return false;
     }
@@ -243,7 +282,6 @@ fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: 
     var stack: array<u32, 32>;
     var stackPtr: i32 = 0;
 
-    // Push the root
     stack[0] = inst.bvhRootIndex;
     stackPtr = 1;
 
@@ -264,9 +302,9 @@ fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: 
 
         numBoxQueries = numBoxQueries + 1u;
 
-        if (node.count > 0u) // leaf
+        if (node.count > 0u)
         {
-            for (var i = 0u; i < node.count; i++) // triangles per se...
+            for (var i = 0u; i < node.count; i++)
             {
                 let localTriIdx = node.leftOrFirst + i;
                 let globalTriIdx = localTriIdx + inst.triOffset;
@@ -304,7 +342,6 @@ fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: 
         }
         else
         {
-            // Small optimization: push farthest node first, so we traverse closest one first
             let leftIdx = node.leftOrFirst;
             let rightIdx = node.leftOrFirst + 1u;
 
@@ -398,7 +435,6 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
 
     if (hitCount == 0u) { return vec3f(0.0); }
 
-    // Heatmap: blue (1 hit) → green (few) → yellow → red (many)
     let t = clamp(f32(hitCount) / 8.0, 0.0, 1.0);
     if (t < 0.5)
     {
@@ -433,7 +469,6 @@ fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>, maxDist: f32, shadow: bool) -
         }
     }
 
-    // Get the normal back into world space
     if (hitSomething)
     {
         let inst = meshInstances[(*hit).instanceIndex];
@@ -490,96 +525,66 @@ fn getMaterialProperties(material: Material, uv: vec2f) -> vec3f
 }
 
 // ============================== //
-fn rayTraceWithBounces(initialRay: Ray, maxBounces: u32) -> vec3f
+fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
 {
     var currentRay = initialRay;
-    let reflectanceEpsilon: f32 = 0.01;
-    let maxDistance: f32 = 2000.0;
+    var accumulation = vec3f(0.0, 0.0, 0.0);
+    var throughput = vec3f(1.0, 1.0, 1.0);
+    let maxDistance = 1e30;
+    let pi = 3.14159265359;
 
-    // 1. Primary ray
-    var hit: Hit;
-    if (!rayTraceOnce(currentRay, &hit, maxDistance, false))
+    for (var depth = 0u; depth < maxDepth; depth++)
     {
-        return vec3f(0.0, 0.0, 0.0); // No hit, return black
-    }
-
-    // 2. In case we hit something
-    var primaryHit: Hit = hit;
-    let primaryHitPos = getHitPosition(currentRay, primaryHit.distance);
-    let material = getMaterial(primaryHit.instanceIndex);
-
-    let matProps = getMaterialProperties(material, primaryHit.uvAtHit);
-    let metalness = matProps.x;
-    let roughness = matProps.y;
-
-    // TODO: better reflectance model?
-    let reflectance = metalness * (1.0 - roughness * 0.5);
-    if (reflectance < reflectanceEpsilon)
-    {
-        return computeMicrofacetBRDF(primaryHitPos, primaryHit.normalAtHit, material, primaryHit.uvAtHit);
-    }
-
-    var primaryShadedColor = vec3f(0.0, 0.0, 0.0);
-    if (reflectance < 1.0)
-    {
-        primaryShadedColor = computeMicrofacetBRDF(primaryHitPos, primaryHit.normalAtHit, material, primaryHit.uvAtHit);
-    }
-
-    // 3. Accumulate reflectancies
-    var accumulatedReflectance: f32 = reflectance;
-    var reflectedColor = vec3f(0.0, 0.0, 0.0);
-
-    let reflectedDir = reflectRay(currentRay.direction, primaryHit.normalAtHit);
-    currentRay.origin = primaryHitPos + primaryHit.normalAtHit * 0.001; // EPSILON for avoidance of self intersection
-    currentRay.direction = reflectedDir;
-
-    for (var bounce: u32 = 0u; bounce < maxBounces; bounce = bounce + 1u)
-    {
-        var bounceHit: Hit;
-        if (!rayTraceOnce(currentRay, &bounceHit, maxDistance, false))
+        var hit: Hit;
+        if (!rayTraceOnce(currentRay, &hit, maxDistance, false))
         {
             break;
         }
 
-        let bounceHitPos = getHitPosition(currentRay, bounceHit.distance);
-        let bounceHitNormal = bounceHit.normalAtHit;
-        let bounceMaterial = getMaterial(bounceHit.instanceIndex);
+        let hitPos = getHitPosition(currentRay, hit.distance);
+        let normal = hit.normalAtHit;
+        let mat = getMaterial(hit.instanceIndex);
 
-        let bounceMatProps = getMaterialProperties(bounceMaterial, bounceHit.uvAtHit);
-        let bounceMetalness = bounceMatProps.x;
-        let bounceRoughness = bounceMatProps.y;
-        let bounceReflectance = bounceMetalness * (1.0 - bounceRoughness * 0.5);
+        // ---- DIRECT LIGHTING ----
+        let direct = computeDirectLighting(hitPos, normal, mat, hit.uvAtHit);
+        accumulation += throughput * direct;
 
-        let distanceAttenuation = 1.0 / (1.0 + bounceHit.distance * 0.01);
-
-        var bounceShadedColor = vec3f(0.0, 0.0, 0.0);
-        if (bounceReflectance < 1.0)
+        // ---- INDIRECT BOUNCE ----
+        var albedo = mat.albedo;
+        if (mat.useAlbedoTexture > 0.5 && mat.textureIndex >= 0.0) 
         {
-            bounceShadedColor = computeMicrofacetBRDF(bounceHitPos, bounceHitNormal, bounceMaterial, bounceHit.uvAtHit);
+            albedo = textureSampleLevel(textures, materialSampler, hit.uvAtHit, i32(mat.textureIndex) * 4, 2.0).rgb;
         }
 
-        // (1 - bounceReflectance) for own albedo
-        let colorContribution = (1.0 - bounceReflectance) * bounceShadedColor * distanceAttenuation;
-        reflectedColor = reflectedColor + colorContribution * accumulatedReflectance;
-        accumulatedReflectance = accumulatedReflectance * bounceReflectance;
+        let newDir = sampleHemisphereUniform(normal);
+        let cosTheta = max(dot(newDir, normal), 0.0);
 
-        if (accumulatedReflectance < reflectanceEpsilon)
+        // Lambert BRDF = albedo / pi
+        // Uniform hemisphere PDF = 1 / (2 * pi)
+        // Weight = BRDF * cosTheta / PDF = (albedo/pi) * cosTheta * 2*pi = 2 * albedo * cosTheta
+        throughput *= 2.0 * albedo * cosTheta;
+
+        // RUSSIAN ROULETTE
+        if (depth >= 2u && uniforms.roulette > 0u)
         {
-            break;
+            let pSurvive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
+            if (rand() > pSurvive)
+            {
+                break;
+            }
+            throughput /= pSurvive;
         }
 
-        let newReflectedDir = reflectRay(currentRay.direction, bounceHitNormal);
-        currentRay.origin = bounceHitPos + bounceHitNormal * 0.001;
-        currentRay.direction = newReflectedDir;
+        // Launch indirect ray
+        currentRay.origin = hitPos + normal * 0.001;
+        currentRay.direction = newDir;
     }
 
-    let finalColor = (1.0 - reflectance) * primaryShadedColor + reflectedColor;
-
-    return finalColor;
+    return accumulation;
 }
 
 // ============================== //
-fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: vec2f) -> vec3f
+fn computeDirectLighting(hitPos: vec3f, normal: vec3f, material: Material, uv: vec2f) -> vec3f
 {
     var albedo = material.albedo;
     if (material.useAlbedoTexture > 0.5 && material.textureIndex >= 0.0)
@@ -587,36 +592,15 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
         albedo = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4, 2.0).rgb;
     }
 
-    var alphap = material.roughness;
-    if (material.usePerlinRoughness > 0.5)
-    {
-        let perlinRoughness = fbmPerlin2D(uv * 5.0, material.perlinFreq, 0.5, 4, 2.0, 0.5);
-        alphap = clamp(perlinRoughness * 0.5 + 0.5, 0.0, 1.0);
-    }
-    if (material.useRoughnessTexture > 0.5 && material.textureIndex >= 0.0)
-    {
-        alphap = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 2, 2.0).g;
-    }
-    alphap = max(alphap, 0.001);
+    let matProps = getMaterialProperties(material, uv);
+    let roughness = matProps.y;
+    let metalness = matProps.x;
+    let alphap = roughness;
     
-    var metalness = material.metalness;
-    if (material.usePerlinMetalness > 0.5)
-    {
-        // Slight offset from UVS of perlin roughness to avoid correlation
-        let perlinMetalness = fbmPerlin2D(uv * 5.0 + vec2f(5.2, 1.3), material.perlinFreq, 0.5, 4, 2.0, 0.5);
-        metalness = clamp(perlinMetalness * 0.5 + 0.5, 0.0, 1.0);
-    }
-    if (material.useMetalnessTexture > 0.5 && material.textureIndex >= 0.0)
-    {
-        metalness = textureSampleLevel(textures, materialSampler, uv, i32(material.textureIndex) * 4 + 1, 2.0).r;
-    }
-    
-    let ka = 0.1;
     var n = normalize(normal);
     let pi = 3.14159265359;
 
-    var totalColor = ka * albedo * (1.0 - metalness); // Prepare a small ambient term
-
+    var totalColor = vec3f(0.0, 0.0, 0.0);
     for (var i = 0; i < 3; i = i + 1)
     {
         if (uniforms.lights[i].enabled < 0.5)
@@ -633,13 +617,11 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
 
         let wh = normalize(wi + wo);
 
-        // Dot products
         let NdotV = max(dot(n, wo), 0.0001);
         let NdotL = max(dot(n, wi), 0.0001);
         let NdotH = max(dot(n, wh), 0.0);
         let LdotH = max(dot(wi, wh), 0.0);
 
-        // Check if we are in the cone 
         var lightDir = normalize(uniforms.lights[i].direction);
         var cosAngle = dot(-wi, lightDir);
         if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
@@ -647,7 +629,6 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
             continue;
         }
 
-        // Shadow ray tracing
         const shadowBias = 0.0001;
         var shadowRay: Ray;
         shadowRay.origin = hitPos + shadowBias * normal;
@@ -656,7 +637,6 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
         var shadowHit: Hit;
         let inShadow = rayTraceOnce(shadowRay, &shadowHit, lightDistance, true);
     
-        // If in shadow (and we find blocker)
         if (inShadow && shadowHit.distance < lightDistance)
         {
             continue;
@@ -664,26 +644,15 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
 
         let fade = smoothstep(cos(uniforms.lights[i].coneAngle), cos(uniforms.lights[i].coneAngle) + 0.05, cosAngle);
 
-
-        // Fresnel term (schlick's approximation)
         let F0 = mix(vec3(0.04), albedo, metalness);
         let F = F0 + (1.0 - F0) * pow(1.0 - LdotH, 5.0);
 
-        // f = fd + fs
-        // fd = lambert BRDF
-        // fs = microfacet BRDF = DFG term
-
-        // DIFFUSE
         let lambert = albedo / pi;
         let kd = (1.0 - F) * (1.0 - metalness);
         let fd = kd * lambert;
 
-        // SPECULAR
-
-        // Trowbridge-Reitz Distribution
         let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
 
-        // Geometry term (GGX)
         let K = (alphap) * sqrt(2.0 / pi);
         let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
         let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
@@ -701,62 +670,9 @@ fn computeMicrofacetBRDF(hitPos: vec3f, normal: vec3f, material: Material, uv: v
     }
 
     return totalColor;
-} 
-
-// ============================== //
-fn computeLambertShading(hitPos: vec3f, normal: vec3f, baseColor: vec3f) -> vec3f
-{
-    let ambientStrength = 0.1;
-    let ambientColor = baseColor * ambientStrength;
-
-    var totalColor = vec3f(0.0, 0.0, 0.0);
-    for (var i = 0; i < 3; i++)
-    {
-        if (uniforms.lights[i].enabled < 0.5)
-        {
-            continue;
-        }
-
-        let pos2light = uniforms.lights[i].position - hitPos;
-        let lightDistance = length(pos2light);
-        let wi = normalize(pos2light);
-        let spotDir = normalize(uniforms.lights[i].direction);
-
-        // Are we in the cone
-        let cosAngle = dot(-wi, spotDir);
-        if (cosAngle < cos(uniforms.lights[i].coneAngle)) 
-        {
-            continue;
-        }
-
-        // Shadow ray tracing
-        const shadowBias = 0.0001;
-        var shadowRay: Ray;
-        shadowRay.origin = hitPos + shadowBias * normal;
-        shadowRay.direction = wi;
-
-        var shadowHit: Hit;
-        let inShadow = rayTraceOnce(shadowRay, &shadowHit, lightDistance, true);
-    
-        // If in shadow (and we find blocker)
-        if (inShadow && shadowHit.distance < lightDistance)
-        {
-            continue;
-        }
-
-        // Not in shadow, compute full Lambert shading
-        let NdotL = max(0.0, dot(normal, wi));
-        let lightAttenuation = uniforms.lights[i].intensity / (uniforms.a_c + uniforms.a_l * lightDistance + uniforms.a_q * lightDistance * lightDistance);
-        let diffuse = baseColor * uniforms.lights[i].color * NdotL * lightAttenuation;
-        
-        totalColor = totalColor + diffuse;
-    }
-   
-    return ambientColor + totalColor;
 }
 
 // ============================== //
-// Need to pass Screen -> NDC -> Clip -> View -> World
 fn ray_at(screen_coord: vec2f) -> Ray 
 {
     let ndc = vec2f(screen_coord.x * 2.0 - 1.0, screen_coord.y * 2.0 - 1.0);
@@ -778,8 +694,8 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
 
     if (uniforms.mode == 1u)
     {
-        let depth = u32(uniforms.bvhVisualizationDepth - 1.0);
-        let color = debugBVHTraversal(ray, depth);
+        let bvhdepth = u32(uniforms.bvhVisualizationDepth - 1.0);
+        let color = debugBVHTraversal(ray, bvhdepth);
         return vec4f(color, 1.0);
     }
 
@@ -788,14 +704,43 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
 
     if (uniforms.mode == 0u)
     {
-        color = rayTraceWithBounces(ray, uniforms.numBounces);
+        var totalColor = vec3f(0.0, 0.0, 0.0);
+        let n = uniforms.numSamples;
+        let stratSize = u32(ceil(sqrt(f32(n))));
+
+        var sampleIndex = 0u;
+        for (var sy = 0u; sy < stratSize; sy++)
+        {
+            for (var sx = 0u; sx < stratSize; sx++)
+            {
+                if (sampleIndex >= n) { break; }
+
+                initRNG(input.position.xy, sampleIndex);
+
+                let stratumOffset = vec2f(
+                    (f32(sx) + rand()) / f32(stratSize),
+                    (f32(sy) + rand()) / f32(stratSize)
+                );
+
+                let jitteredUV = vec2f(
+                    (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
+                    1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
+                );
+
+                let sampleRay = ray_at(jitteredUV);
+                totalColor += pathTrace(sampleRay, uniforms.ptDepth);
+                sampleIndex++;
+            }
+        }
+
+        color = totalColor / f32(n);
     }
     else if (uniforms.mode == 2u)
     {
         if (rayTraceOnce(ray, &hit, maxDistance, false))
         {
             let normal = hit.normalAtHit;
-            color = normal * 0.5 + vec3f(0.5, 0.5, 0.5); // map from [-1,1] to [0,1]
+            color = normal * 0.5 + vec3f(0.5, 0.5, 0.5);
         }
         else
         {
@@ -817,7 +762,6 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     }
     else if (uniforms.mode == 4u)
     {
-        // visualize ray directions
         let dir = normalize(ray.direction);
         color = dir;
     }

@@ -73,14 +73,15 @@
     import { startup_9 } from './9-Transparency/main';
     import { startup_10 } from './10-PBR/main';
     import { startup_11 } from './11-BVH/main';
+    import { startup_12 } from './12-MonteCarlo/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
     const currentRenderer = ref<any>(null);
     const isSwitching = ref(false);
 
-    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10, startup_11];
+    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10, startup_11, startup_12];
     const numberOfExamples = startupFunctions.length;
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Video', 'Game', 'Ray Trace', 'Transparency', 'PBR', 'BVH'];
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Video', 'Game', 'Ray Trace', 'Transparency', 'PBR', 'BVH', 'Monte Carlo'];
     
     // Slider state
     const hoveredIndex = ref<number|null>(null);
@@ -156,6 +157,6 @@
     //================================//
     onMounted(() => {
         addUtilElementDefaults();
-        selectExample(8);
+        selectExample(11);
     });
 </script>

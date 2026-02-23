@@ -1514,9 +1514,7 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
     Meshes.push(loadedDragonMesh);
 
     for (const mesh of Meshes)
-    {
         mesh.ComputeBVH();
-    }
 
     return {
         meshes: Meshes,
@@ -1525,6 +1523,215 @@ export async function createCornellBox3(meshMaterials: Material[]): Promise<Scen
             meshTransforms: [Meshes[5].GetTransform()],
             meshMaterials: [
                 Meshes[5].GetMaterial(), // dragon
+            ]
+        }
+    };
+}
+
+//================================//
+export async function createCornellBox4(meshMaterials: Material[]): Promise<SceneInformation>
+{    
+    const Meshes: Mesh[] = [];
+
+    Meshes.push(new Mesh("white wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "whiteWall" })));
+    Meshes.push(new Mesh("Back Wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "backWall" })));
+    Meshes.push(new Mesh("red wall", createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall" })));
+    Meshes.push(new Mesh("green wall", createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall" })));
+    Meshes.push(new Mesh("light", createDefaultMaterial({ albedo: [1.0, 1.0, 1.0], roughness: 0.0, name: "light" })));
+    
+    const cube1 = meshMaterials.find(mat => mat.name === "cube1") || createDefaultMaterial({
+        albedo: [0.73, 0.73, 0.73],
+        name: "cube1",
+        textureIndex: 0,
+        useAlbedoTexture: false,
+        useRoughnessTexture: false,
+        useMetalnessTexture: false
+    });
+
+    const cube2 = meshMaterials.find(mat => mat.name === "cube2") || createDefaultMaterial({
+        albedo: [0.73, 0.73, 0.73],
+        name: "cube2",
+        textureIndex: 1,
+        useAlbedoTexture: false,
+        useRoughnessTexture: false,
+        useMetalnessTexture: false
+    });
+    
+    //================================//
+    function addQuad(
+        Mesh: Mesh,
+        v0: glm.vec3,
+        v1: glm.vec3,
+        v2: glm.vec3,
+        v3: glm.vec3,
+        flipNormal: boolean = false
+    ): void 
+    {
+        let normal = computeNormal(v0, v1, v2);
+        if (flipNormal)
+            normal = glm.vec3.fromValues(-normal[0], -normal[1], -normal[2]);
+        
+        const i0 = Mesh.addVertex({pos: v0, normal: normal, uv: glm.vec2.fromValues(0, 0)});
+        const i1 = Mesh.addVertex({pos: v1, normal: normal, uv: glm.vec2.fromValues(1, 0)});
+        const i2 = Mesh.addVertex({pos: v2, normal: normal, uv: glm.vec2.fromValues(1, 1)});
+        const i3 = Mesh.addVertex({pos: v3, normal: normal, uv: glm.vec2.fromValues(0, 1)});
+
+        Mesh.addTriangle([i0, i1, i2]);
+        Mesh.addTriangle([i0, i2, i3]);
+    }
+
+    //================================//
+    function addCube(
+        mesh: Mesh,
+        center: [number, number, number],
+        size: [number, number, number],
+    ): void
+    {
+        // Add 6 quads
+        const hx = size[0] / 2;
+        const hy = size[1] / 2;
+        const hz = size[2] / 2;
+
+        const vertices = [
+
+            // Front face
+            [center[0] - hx, center[1] - hy, center[2] + hz],
+            [center[0] + hx, center[1] - hy, center[2] + hz],
+            [center[0] + hx, center[1] + hy, center[2] + hz],
+            [center[0] - hx, center[1] + hy, center[2] + hz],
+
+            // Back face
+            [center[0] - hx, center[1] - hy, center[2] - hz],
+            [center[0] + hx, center[1] - hy, center[2] - hz],
+            [center[0] + hx, center[1] + hy, center[2] - hz],
+            [center[0] - hx, center[1] + hy, center[2] - hz],
+
+            // Left face
+            [center[0] - hx, center[1] - hy, center[2] - hz],
+            [center[0] - hx, center[1] - hy, center[2] + hz],
+            [center[0] - hx, center[1] + hy, center[2] + hz],
+            [center[0] - hx, center[1] + hy, center[2] - hz],
+
+            // Right face
+            [center[0] + hx, center[1] - hy, center[2] - hz],
+            [center[0] + hx, center[1] - hy, center[2] + hz],
+            [center[0] + hx, center[1] + hy, center[2] + hz],
+            [center[0] + hx, center[1] + hy, center[2] - hz],
+
+            // Top face
+            [center[0] - hx, center[1] + hy, center[2] - hz],
+            [center[0] - hx, center[1] + hy, center[2] + hz],
+            [center[0] + hx, center[1] + hy, center[2] + hz],
+            [center[0] + hx, center[1] + hy, center[2] - hz],
+
+            // Bottom face
+            [center[0] - hx, center[1] - hy, center[2] - hz],
+            [center[0] - hx, center[1] - hy, center[2] + hz],
+            [center[0] + hx, center[1] - hy, center[2] + hz],
+            [center[0] + hx, center[1] - hy, center[2] - hz],
+        ];
+
+        addQuad(mesh, vertices[0], vertices[1], vertices[2], vertices[3]);
+        addQuad(mesh, vertices[5], vertices[4], vertices[7], vertices[6]);
+        addQuad(mesh, vertices[8], vertices[9], vertices[10], vertices[11]);
+        addQuad(mesh, vertices[13], vertices[12], vertices[15], vertices[14]);
+        addQuad(mesh, vertices[16], vertices[17], vertices[18], vertices[19]);
+        addQuad(mesh, vertices[21], vertices[20], vertices[23], vertices[22]);
+    };
+
+    // ============== FLOOR (white) ============== //
+    addQuad(
+        Meshes[0],
+        glm.vec3.fromValues(552.8, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        false,
+    );
+    
+    // ============== CEILING (white) ============== //
+    addQuad(
+        Meshes[0],
+        glm.vec3.fromValues(556.0, 548.8, 0.0),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 0.0),
+        false,
+    );
+    
+    // ============== LIGHT (slightly below ceiling) ============== //
+    const lightEpsilon = 1.0;
+    const lightY = 548.8 - lightEpsilon;
+    addQuad(
+        Meshes[4],
+        glm.vec3.fromValues(343.0, lightY, 227.0),
+        glm.vec3.fromValues(343.0, lightY, 332.0),
+        glm.vec3.fromValues(213.0, lightY, 332.0),
+        glm.vec3.fromValues(213.0, lightY, 227.0),
+        false,
+    );
+    
+    // ============== BACK WALL (white) ============== //
+    addQuad(
+        Meshes[1],
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        false,
+    );
+    
+    // ============== RIGHT WALL (green) ============== //
+    addQuad(
+        Meshes[3],
+        glm.vec3.fromValues(0.0, 0.0, 559.2),
+        glm.vec3.fromValues(0.0, 0.0, 0.0),
+        glm.vec3.fromValues(0.0, 548.8, 0.0),
+        glm.vec3.fromValues(0.0, 548.8, 559.2),
+        false
+    );
+    
+    // ============== LEFT WALL (red) ============== //
+    addQuad(
+        Meshes[2],
+        glm.vec3.fromValues(552.8, 0.0, 0.0),
+        glm.vec3.fromValues(549.6, 0.0, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 559.2),
+        glm.vec3.fromValues(556.0, 548.8, 0.0),
+        false,
+    );
+
+    // ============== SHORT BLOCK ============== //
+    const shortBlockMesh = new Mesh("short block", cube1);
+    addCube(shortBlockMesh, [0, 0, 0], [167.3, 165.0, 167.0]);
+    shortBlockMesh.TransformMesh({
+        translation: glm.vec3.fromValues(185.5, 82.5, 169.0),
+        rotation: glm.quat.fromEuler(glm.quat.create(), 0, 17.0, 0),
+        scale: glm.vec3.fromValues(1, 1, 1)
+    });
+    Meshes.push(shortBlockMesh);
+
+    // ============== TALL BLOCK ============== //
+    const tallBlockMesh = new Mesh("tall block", cube2);
+    addCube(tallBlockMesh, [0, 0, 0], [166.4, 330.0, 165.4]);
+    tallBlockMesh.TransformMesh({
+        translation: glm.vec3.fromValues(368.5, 165.0, 351.25),
+        rotation: glm.quat.fromEuler(glm.quat.create(), 0, 72.9, 0),
+        scale: glm.vec3.fromValues(1, 1, 1)
+    });
+    Meshes.push(tallBlockMesh);
+
+    for (const mesh of Meshes)
+        mesh.ComputeBVH();
+    
+    return {
+        meshes: Meshes,
+        additionalInfo: {
+            meshIndices: [5, 6],
+            meshTransforms: [Meshes[5].GetTransform(), Meshes[6].GetTransform()],
+            meshMaterials: [
+                cube1,
+                cube2
             ]
         }
     };

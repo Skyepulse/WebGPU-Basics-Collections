@@ -157,8 +157,8 @@ class RayTracer
             center: glm.vec3.fromValues(278, 548, 279),
             intensity: 40.0,
             normalDirection: glm.vec3.fromValues(0, -1, 0),
-            width: 130,
-            height: 105,
+            width: 100,
+            height: 100,
             color: glm.vec3.fromValues(1, 1, 1),
             enabled: true
         };

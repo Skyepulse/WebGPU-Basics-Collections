@@ -1690,7 +1690,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     
     // ============== RIGHT WALL (green) ============== //
     addQuad(
-        Meshes[4],
+        Meshes[3],
         glm.vec3.fromValues(0.0, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 0.0, 0.0),
         glm.vec3.fromValues(0.0, 548.8, 0.0),
@@ -1700,7 +1700,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     
     // ============== LEFT WALL (red) ============== //
     addQuad(
-        Meshes[3],
+        Meshes[4],
         glm.vec3.fromValues(552.8, 0.0, 0.0),
         glm.vec3.fromValues(549.6, 0.0, 559.2),
         glm.vec3.fromValues(556.0, 548.8, 559.2),

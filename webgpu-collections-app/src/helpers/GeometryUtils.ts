@@ -1533,31 +1533,31 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
 {    
     const Meshes: Mesh[] = [];
 
-    Meshes.push(new Mesh("white wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "whiteWall" })));
-    Meshes.push(new Mesh("Back Wall", createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "backWall" })));
-    Meshes.push(new Mesh("red wall", createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall" })));
-    Meshes.push(new Mesh("green wall", createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall" })));
+    const topWall = meshMaterials.find(mat => mat.name === "topWall") || createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "topWall", metalness: 1.0, roughness: 0.0 });
+    Meshes.push(new Mesh("top wall", topWall));
+    const floorWall = meshMaterials.find(mat => mat.name === "floorWall") || createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "floorWall", metalness: 0.0, roughness: 1.0 });
+    Meshes.push(new Mesh("floor wall", floorWall));
+    const backWall = meshMaterials.find(mat => mat.name === "backWall") || createDefaultMaterial({ albedo: [0.73, 0.73, 0.73], name: "backWall", textureIndex: 0, useAlbedoTexture: true, useRoughnessTexture: true, useMetalnessTexture: true, roughness: 1.0, metalness: 0.0 });
+    Meshes.push(new Mesh("back wall", backWall));
+    const redWall = meshMaterials.find(mat => mat.name === "redWall") || createDefaultMaterial({ albedo: [0.65, 0.05, 0.05], name: "redWall", roughness: 0.07, metalness: 0.94 });
+    Meshes.push(new Mesh("red wall", redWall));
+    const greenWall = meshMaterials.find(mat => mat.name === "greenWall") || createDefaultMaterial({ albedo: [0.12, 0.45, 0.15], name: "greenWall", roughness: 0.07, metalness: 0.94 });
+    Meshes.push(new Mesh("green wall", greenWall));
     
     const cube1 = meshMaterials.find(mat => mat.name === "cube1") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
         name: "cube1",
-        useAlbedoTexture: false,
-        useRoughnessTexture: false,
-        useMetalnessTexture: false
     });
 
     const cube2 = meshMaterials.find(mat => mat.name === "cube2") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
         name: "cube2",
-        useAlbedoTexture: false,
-        useRoughnessTexture: false,
-        useMetalnessTexture: false
     });
 
     const calavera = meshMaterials.find(mat => mat.name === "calavera") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
         name: "calavera",
-        textureIndex: 0,
+        textureIndex: 1,
         useAlbedoTexture: true,
         useRoughnessTexture: false,
         useMetalnessTexture: false,
@@ -1568,7 +1568,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     const takis = meshMaterials.find(mat => mat.name === "takis") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
         name: "takis",
-        textureIndex: 1,
+        textureIndex: 2,
         useAlbedoTexture: true,
         useRoughnessTexture: false,
         useMetalnessTexture: false,
@@ -1660,7 +1660,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
 
     // ============== FLOOR (white) ============== //
     addQuad(
-        Meshes[0],
+        Meshes[1],
         glm.vec3.fromValues(552.8, 0.0, 0.0),
         glm.vec3.fromValues(0.0, 0.0, 0.0),
         glm.vec3.fromValues(0.0, 0.0, 559.2),
@@ -1680,7 +1680,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     
     // ============== BACK WALL (white) ============== //
     addQuad(
-        Meshes[1],
+        Meshes[2],
         glm.vec3.fromValues(549.6, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 548.8, 559.2),
@@ -1690,7 +1690,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     
     // ============== RIGHT WALL (green) ============== //
     addQuad(
-        Meshes[3],
+        Meshes[4],
         glm.vec3.fromValues(0.0, 0.0, 559.2),
         glm.vec3.fromValues(0.0, 0.0, 0.0),
         glm.vec3.fromValues(0.0, 548.8, 0.0),
@@ -1700,7 +1700,7 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     
     // ============== LEFT WALL (red) ============== //
     addQuad(
-        Meshes[2],
+        Meshes[3],
         glm.vec3.fromValues(552.8, 0.0, 0.0),
         glm.vec3.fromValues(549.6, 0.0, 559.2),
         glm.vec3.fromValues(556.0, 548.8, 559.2),
@@ -1753,10 +1753,15 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     
     return {
         meshes: Meshes,
-        additionalInfo: {
-            meshIndices: [4, 5, 6, 7],
-            meshTransforms: [Meshes[4].GetTransform(), Meshes[5].GetTransform(), Meshes[6].GetTransform(), Meshes[7].GetTransform()],
+        additionalInfo: { // Takis: 8, calavera: 7
+            meshIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            meshTransforms: [Meshes[0].GetTransform(), Meshes[1].GetTransform(), Meshes[2].GetTransform(), Meshes[3].GetTransform(), Meshes[4].GetTransform(), Meshes[5].GetTransform(), Meshes[6].GetTransform(), Meshes[7].GetTransform(), Meshes[8].GetTransform()],
             meshMaterials: [
+                topWall,
+                floorWall,
+                backWall,
+                redWall,
+                greenWall,
                 cube1,
                 cube2,
                 calavera,

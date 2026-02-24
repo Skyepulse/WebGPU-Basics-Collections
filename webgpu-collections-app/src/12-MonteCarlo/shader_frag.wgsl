@@ -191,6 +191,34 @@ fn sampleUniformCosine(normal: vec3f) -> vec3f
 }
 
 // ============================== //
+// In Crook Torrance GGX BRDF, if we sample on specular lobe,
+// it is with regards to the roughness value.
+fn sampleGGXHalfVector(normal: vec3f, alpha: f32) -> vec3f
+{
+    let r1 = rand();
+    let r2 = rand();
+    let pi = 3.14159265359;
+    let alpha2 = alpha * alpha;
+
+    // inverse CDF
+    let cosTheta = sqrt((1.0 - r1) / (1.0 + (alpha2 - 1.0) * r1));
+    let sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+    let phi = 2.0 * pi * r2;
+
+    let localHalf = vec3f(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+
+    var up = vec3f(0.0, 1.0, 0.0);
+    if (abs(normal.y) > 0.999) 
+    {
+        up = vec3f(1.0, 0.0, 0.0);
+    }
+    let tangent = normalize(cross(up, normal));
+    let bitangent = cross(normal, tangent);
+
+    return normalize(tangent * localHalf.x + bitangent * localHalf.y + normal * localHalf.z);
+}
+
+// ============================== //
 fn getVertex(index: u32) -> vec3f 
 {
     let i = index * 3u;
@@ -561,7 +589,7 @@ fn getMaterialProperties(material: Material, uv: vec2f) -> vec3f
 }
 
 // ============================== //
-fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
+fn lambertBRDFPathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
 {
     var currentRay = initialRay;
     var accumulation = vec3f(0.0, 0.0, 0.0);
@@ -582,7 +610,7 @@ fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
         let mat = getMaterial(hit.instanceIndex);
 
         // ---- DIRECT LIGHTING ----
-        let direct = computeDirectLighting(hitPos, normal, mat, hit.uvAtHit);
+        let direct = nextEventEstimation(hitPos, normal, mat, hit.uvAtHit);
         accumulation += throughput * direct;
 
         // ---- INDIRECT BOUNCE ----
@@ -615,7 +643,138 @@ fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
 }
 
 // ============================== //
-fn computeDirectLighting(hitPos: vec3f, normal: vec3f, material: Material, uv: vec2f) -> vec3f
+// A.K.A indirect global illumination
+// MEMO FOR ME:
+// "How much light arrives from everywhere else in the scene from indirect bounces?"
+// 1) Based on material properties, decide if next bounce is specular or diffuse
+// 2) Sample direction (example mirror follows snell's law, while diffuse is cosine weighted)
+// 3) Evaluate full BRDF there
+// 4) Divide by the PDF of the sampling strategy
+fn CrookTorranceBRDFPathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
+{
+    var currentRay = initialRay;
+    var accumulation = vec3f(0.0, 0.0, 0.0);
+    var throughput = vec3f(1.0, 1.0, 1.0);
+    let maxDistance = 1e30;
+    let pi = 3.14159265359;
+
+    for (var depth = 0u; depth < maxDepth; depth++)
+    {
+        var hit: Hit;
+        if (!rayTraceOnce(currentRay, &hit, maxDistance, false))
+        {
+            break;
+        }   
+
+        let hitPos = getHitPosition(currentRay, hit.distance);
+        let normal = hit.normalAtHit;
+        let mat = getMaterial(hit.instanceIndex);
+
+        let direct = nextEventEstimation(hitPos, normal, mat, hit.uvAtHit);
+        accumulation += throughput * direct;
+
+        // -- INDIRECT BOUNCE (but with MIS) --
+        var albedo = mat.albedo;
+        if (mat.useAlbedoTexture > 0.5 && mat.textureIndex >= 0.0) 
+        {
+            albedo = textureSampleLevel(textures, materialSampler, hit.uvAtHit, i32(mat.textureIndex) * 4, 2.0).rgb;
+        }
+
+        let matProps = getMaterialProperties(mat, hit.uvAtHit);
+        let metalness = matProps.x;
+        let roughness = matProps.y;
+        let alphap = roughness;
+        let EPSILON = 0.0001;
+
+        let wo = normalize(-currentRay.direction);
+        let n = normalize(normal);
+        let NdotV = max(dot(n, wo), EPSILON);
+
+        // Based on material properties, decide if next bounce is specular or diffuse
+        // Metals: F0 = albedo, kd = 0, all specular
+        // Dielectrics: F0 = 0.04, kd = 0.96, mostly diffuse
+        let F0 = mix(vec3(0.04), albedo, metalness);
+        let specularWeight = max(max(F0.r, F0.g), F0.b);
+        let probabilitySpecular = clamp(specularWeight + metalness * (1.0 - specularWeight), 0.1, 0.9);
+        let probabilityDiffuse = 1.0 - probabilitySpecular;
+
+        var wi: vec3f;
+        var wh: vec3f;
+
+        let decision = rand();
+        if (decision < probabilitySpecular) // Spec choice
+        {
+            wh = sampleGGXHalfVector(n, alphap);
+            wi = reflectRay(-wo, wh);
+            if (dot(wi, n) <= 0.0)
+            {
+                break;
+            }
+        }
+        else
+        {
+            wi = sampleUniformCosine(n);
+            wh = normalize(wi + wo);
+        }
+
+        // Full BRDF
+        let NdotL = max(dot(n, wi), EPSILON);
+        let NdotH = max(dot(n, wh), EPSILON);
+        let VdotH = max(dot(wo, wh), EPSILON);
+
+        let F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+
+        let lambert = albedo / pi;
+        let kd = (1.0 - F) * (1.0 - metalness);
+        let fd = kd * lambert; //
+
+        let D = (alphap * alphap) / (pi * pow((NdotH * NdotH) * (alphap * alphap - 1.0) + 1.0, 2.0));
+
+        let K = (alphap) * sqrt(2.0 / pi);
+        let G_schlick_wo = NdotV / (NdotV * (1.0 - K) + K);
+        let G_schlick_wi = NdotL / (NdotL * (1.0 - K) + K);
+        let G = G_schlick_wo * G_schlick_wi;
+
+        let fs = (D * F * G) / (4.0 * NdotL * NdotV + EPSILON);
+
+        let f = fd + fs;
+
+        // BALANCE MIS
+        let pdfSpecular = D * NdotH / (4.0 * VdotH + EPSILON);
+        let pdfDiffuse = NdotL / pi;
+        let PDF = probabilitySpecular * pdfSpecular + probabilityDiffuse * pdfDiffuse;
+
+        if (PDF < EPSILON)
+        {
+            break;
+        }
+        throughput *= f * NdotL / PDF;
+
+        if (depth >= 2u && uniforms.roulette > 0.5)
+        {
+            let pSurvive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
+            if (rand() > pSurvive)
+            {
+                break;
+            }
+            throughput /= pSurvive;
+        }
+
+        currentRay.origin = hitPos + n * 0.001;
+        currentRay.direction = wi;
+    }
+
+    return accumulation;
+}
+
+// ============================== //
+// A.K.A direct lighting
+// MEMO FOR ME:
+// "How much light arrives at the point from area light?"
+// 1) Sample direction based on light shape
+// 2) Compute whole BRDF multiplied by radiance
+// 3) Divide by the PDF of the sampling
+fn nextEventEstimation(hitPos: vec3f, normal: vec3f, material: Material, uv: vec2f) -> vec3f
 {
     var albedo = material.albedo;
     if (material.useAlbedoTexture > 0.5 && material.textureIndex >= 0.0)
@@ -741,7 +900,7 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     let ray = ray_at(input.uv);
     let maxDistance: f32 = 2000.0;
 
-    if (uniforms.mode == 1u)
+    if (uniforms.mode == 0u)
     {
         let bvhdepth = u32(uniforms.bvhVisualizationDepth - 1.0);
         let color = debugBVHTraversal(ray, bvhdepth);
@@ -754,58 +913,119 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     let n = uniforms.numSamples;
     let stratSize = u32(ceil(sqrt(f32(n))));
 
-    if (uniforms.frameAccumulation < 0.5 )
+    if (uniforms.mode == 1u) // lambert Path tracing
     {
-        var totalColor = vec3f(0.0, 0.0, 0.0);
-        var sampleIndex = 0u;
-        for (var sy = 0u; sy < stratSize; sy++)
+        if (uniforms.frameAccumulation < 0.5 )
         {
-            for (var sx = 0u; sx < stratSize; sx++)
+            var totalColor = vec3f(0.0, 0.0, 0.0);
+            var sampleIndex = 0u;
+            for (var sy = 0u; sy < stratSize; sy++)
             {
-                if (sampleIndex >= n) { break; }
+                for (var sx = 0u; sx < stratSize; sx++)
+                {
+                    if (sampleIndex >= n) { break; }
 
-                initRNG(input.position.xy, sampleIndex);
+                    initRNG(input.position.xy, sampleIndex);
 
-                let stratumOffset = vec2f(
-                    (f32(sx) + rand()) / f32(stratSize),
-                    (f32(sy) + rand()) / f32(stratSize)
-                );
+                    let stratumOffset = vec2f(
+                        (f32(sx) + rand()) / f32(stratSize),
+                        (f32(sy) + rand()) / f32(stratSize)
+                    );
 
-                let jitteredUV = vec2f(
-                    (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
-                    1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
-                );
+                    let jitteredUV = vec2f(
+                        (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
+                        1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
+                    );
 
-                let sampleRay = ray_at(jitteredUV);
-                totalColor += pathTrace(sampleRay, uniforms.ptDepth);
-                sampleIndex++;
+                    let sampleRay = ray_at(jitteredUV);
+                    totalColor += lambertBRDFPathTrace(sampleRay, uniforms.ptDepth);
+                    sampleIndex++;
+                }
             }
-        }
 
-        color = totalColor / f32(n);
+            color = totalColor / f32(n);
+        }
+        else // One sample per frame, accumulate in texture
+        {
+            initRNG(input.position.xy, uniforms.frameCount - 1u);
+            let stratIndex = (uniforms.frameCount - 1u) % (stratSize * stratSize);
+            let stratumOffset = vec2f(
+                (f32(stratIndex % stratSize) + rand()) / f32(stratSize),
+                (f32(stratIndex / stratSize) + rand()) / f32(stratSize)
+            );
+        
+            let jitteredUV = vec2f(
+                (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
+                1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
+            );
+            let sampleRay = ray_at(jitteredUV);
+            let newSample = lambertBRDFPathTrace(sampleRay, uniforms.ptDepth);
+            
+            let oldColor = textureLoad(accumTexture, vec2i(input.position.xy), 0).rgb;
+            
+            let divider = f32(uniforms.frameCount);
+            color = oldColor + (newSample - oldColor) / divider;
+        }
+        return vec4f(color, 1.0);
     }
-    else // One sample per frame, accumulate in texture
+    
+    if (uniforms.mode == 2u) // Crook-Torrance Path tracing with MIS
     {
-        initRNG(input.position.xy, uniforms.frameCount - 1u);
-        let stratIndex = (uniforms.frameCount - 1u) % (stratSize * stratSize);
-        let stratumOffset = vec2f(
-            (f32(stratIndex % stratSize) + rand()) / f32(stratSize),
-            (f32(stratIndex / stratSize) + rand()) / f32(stratSize)
-        );
-    
-        let jitteredUV = vec2f(
-            (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
-            1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
-        );
-        let sampleRay = ray_at(jitteredUV);
-        let newSample = pathTrace(sampleRay, uniforms.ptDepth);
+        if (uniforms.frameAccumulation < 0.5 )
+        {
+            var totalColor = vec3f(0.0, 0.0, 0.0);
+            var sampleIndex = 0u;
+            for (var sy = 0u; sy < stratSize; sy++)
+            {
+                for (var sx = 0u; sx < stratSize; sx++)
+                {
+                    if (sampleIndex >= n) { break; }
+
+                    initRNG(input.position.xy, sampleIndex);
+
+                    let stratumOffset = vec2f(
+                        (f32(sx) + rand()) / f32(stratSize),
+                        (f32(sy) + rand()) / f32(stratSize)
+                    );
+
+                    let jitteredUV = vec2f(
+                        (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
+                        1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
+                    );
+
+                    let sampleRay = ray_at(jitteredUV);
+                    totalColor += CrookTorranceBRDFPathTrace(sampleRay, uniforms.ptDepth);
+                    sampleIndex++;
+                }
+            }
+
+            color = totalColor / f32(n);
+        }
+        else // One sample per frame, accumulate in texture
+        {
+            initRNG(input.position.xy, uniforms.frameCount - 1u);
+            let stratIndex = (uniforms.frameCount - 1u) % (stratSize * stratSize);
+            let stratumOffset = vec2f(
+                (f32(stratIndex % stratSize) + rand()) / f32(stratSize),
+                (f32(stratIndex / stratSize) + rand()) / f32(stratSize)
+            );
         
-        let oldColor = textureLoad(accumTexture, vec2i(input.position.xy), 0).rgb;
-        
-        let divider = f32(uniforms.frameCount);
-        color = oldColor + (newSample - oldColor) / divider;
+            let jitteredUV = vec2f(
+                (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
+                1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
+            );
+            let sampleRay = ray_at(jitteredUV);
+            let newSample = CrookTorranceBRDFPathTrace(sampleRay, uniforms.ptDepth);
+            
+            let oldColor = textureLoad(accumTexture, vec2i(input.position.xy), 0).rgb;
+            
+            let divider = f32(uniforms.frameCount);
+            color = oldColor + (newSample - oldColor) / divider;
+        }
+        return vec4f(color, 1.0);
     }
-    
+
+    // Should not arrive here...
     return vec4f(color, 1.0);
 }
 

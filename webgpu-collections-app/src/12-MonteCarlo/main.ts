@@ -40,11 +40,9 @@ const meshInstanceSize = 20 * 4; // 16 byte matrix, + 4 floats
 //================================//
 enum RayTracerMode
 {
-    pathTrace = 0,
-    BVHVisualization = 1,
-    normal = 2,
-    distance = 3,
-    rayDirections = 4
+    BVHVisualization = 0,
+    lambertPathTrace = 1,
+    crookTorrancePathTrace = 2
 }
 
 //================================//
@@ -142,7 +140,7 @@ class RayTracer
     //================================//
     private showBVH: boolean = false;
     private bvhDepth: number = Infinity;
-    private rayTracerMode: RayTracerMode = RayTracerMode.pathTrace;
+    private rayTracerMode: RayTracerMode = RayTracerMode.crookTorrancePathTrace;
     private ptDepth: number = 6;
     private ptSamples: number = 64; // Default 8x8 stratified sampling
     private randSeed: number = Math.floor(Math.random() * 0xFFFFFFFF);
@@ -169,7 +167,7 @@ class RayTracer
 
         const light = {
             center: glm.vec3.fromValues(278, 548, 279),
-            intensity: 40.0,
+            intensity: 120.0,
             normalDirection: glm.vec3.fromValues(0, -1, 0),
             width: 100,
             height: 100,
@@ -197,6 +195,26 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
         addCheckbox('Frame Accumulation', this.frameAccumulation, utilElement, (value) => { this.frameAccumulation = value; this.frameAccumulationReset = true; });
 
+        const pathTraceSelect = document.createElement('select');
+        pathTraceSelect.style.color = 'black';
+        pathTraceSelect.tabIndex = -1;
+        const modes = ['BVH', 'Lambert (only diffuse)', 'Crook Torrance'];
+        modes.forEach((mode, index) => {
+            const option = document.createElement('option');
+            option.value = index.toString();
+            option.text = mode;
+            pathTraceSelect.appendChild(option);
+        });
+        pathTraceSelect.addEventListener('change', () => 
+        {
+            this.rayTracerMode = parseInt(pathTraceSelect.value) as RayTracerMode;
+            this.frameAccumulationReset = true;
+        });
+        pathTraceSelect.value = this.rayTracerMode.toString();
+
+        utilElement.appendChild(document.createElement('br'));
+        utilElement.appendChild(pathTraceSelect);
+
         this.lights.forEach((_, index) =>
         {
             const callback = (e: MouseEvent) => 
@@ -211,7 +229,7 @@ class RayTracer
                     y: (this.canvas!.offsetTop + this.canvas!.height / 2 - 150)
                 };
                 this.activeContextMenu = createAreaLightContextMenu(middleOfCanvas, this.lights[index], `Edit Light ${index + 1}`, 
-                    (newLight) => { this.lights[index] = newLight; },
+                    (newLight) => { this.lights[index] = newLight; this.frameAccumulationReset = true; },
                     () => { this.activeContextMenu?.remove(); this.activeContextMenu = null; }
                 );
                 document.body.appendChild(this.activeContextMenu);
@@ -219,8 +237,7 @@ class RayTracer
             utilElement.appendChild(document.createElement('br'));
             addButton(`Edit Light ${index + 1}`, utilElement, callback);
         });
-        utilElement.appendChild(document.createElement('br'));
-        addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; this.rayTracerMode = value ? RayTracerMode.BVHVisualization : RayTracerMode.pathTrace; this.frameAccumulationReset = true; });
+
         utilElement.appendChild(document.createElement('br'));
         addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
     }
@@ -1002,11 +1019,17 @@ class RayTracer
         this.initializeUtils();
         this.initializeInputHandlers();
 
-        const calaveraMaterial = this.meshesInfo!.meshMaterials[2];
+        const calaveraMaterial = this.meshesInfo!.meshMaterials[7];
         this.fetchTextureForMaterial(calaveraMaterial, TextureType.Albedo, 'meshes/calavera/textures/Material.002_baseColor.png');
 
-        const takisMaterial = this.meshesInfo!.meshMaterials[3];
+        const takisMaterial = this.meshesInfo!.meshMaterials[8];
         this.fetchTextureForMaterial(takisMaterial, TextureType.Albedo, 'meshes/takis/textures/Material.001_baseColor.png');
+        
+        const backWallMaterial = this.meshesInfo!.meshMaterials[2];
+        this.fetchTextureForMaterial(backWallMaterial, TextureType.Albedo, 'textures/eagle.jpg');
+        this.fetchTextureForMaterial(backWallMaterial, TextureType.Metalness, 'textures/eagle_metalness_roughness.png');
+        this.fetchTextureForMaterial(backWallMaterial, TextureType.Roughness, 'textures/eagle_metalness_roughness.png');
+
         this.mainLoop();
     }
 

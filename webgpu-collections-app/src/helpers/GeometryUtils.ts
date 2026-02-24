@@ -1541,7 +1541,6 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     const cube1 = meshMaterials.find(mat => mat.name === "cube1") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
         name: "cube1",
-        textureIndex: 0,
         useAlbedoTexture: false,
         useRoughnessTexture: false,
         useMetalnessTexture: false
@@ -1550,10 +1549,31 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     const cube2 = meshMaterials.find(mat => mat.name === "cube2") || createDefaultMaterial({
         albedo: [0.73, 0.73, 0.73],
         name: "cube2",
-        textureIndex: 1,
         useAlbedoTexture: false,
         useRoughnessTexture: false,
         useMetalnessTexture: false
+    });
+
+    const calavera = meshMaterials.find(mat => mat.name === "calavera") || createDefaultMaterial({
+        albedo: [0.73, 0.73, 0.73],
+        name: "calavera",
+        textureIndex: 0,
+        useAlbedoTexture: true,
+        useRoughnessTexture: false,
+        useMetalnessTexture: false,
+        roughness: 0.02,
+        metalness: 0.27
+    });
+
+    const takis = meshMaterials.find(mat => mat.name === "takis") || createDefaultMaterial({
+        albedo: [0.73, 0.73, 0.73],
+        name: "takis",
+        textureIndex: 1,
+        useAlbedoTexture: true,
+        useRoughnessTexture: false,
+        useMetalnessTexture: false,
+        roughness: 0.01,
+        metalness: 0.03
     });
     
     //================================//
@@ -1708,17 +1728,39 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     });
     Meshes.push(tallBlockMesh);
 
+    const tallBlockTopTransform = glm.vec3.add(glm.vec3.create(), tallBlockMesh.GetTransform().translation, glm.vec3.fromValues(0, 207.0, 0));
+    const loadedCalaveraMesh: Mesh = await loadMesh('/meshes/calavera/scene.gltf');
+    loadedCalaveraMesh.Material = calavera;
+    loadedCalaveraMesh.TransformMesh({
+        translation: tallBlockTopTransform,
+        rotation: glm.quat.fromEuler(glm.quat.create(), 0, 180.0, 0),
+        scale: glm.vec3.fromValues(60, 60, 60)
+    });
+    Meshes.push(loadedCalaveraMesh);
+
+    const smallBlockTopTransform = glm.vec3.add(glm.vec3.create(), shortBlockMesh.GetTransform().translation, glm.vec3.fromValues(0, 95.5, 0));
+    const loadedTakisMesh: Mesh = await loadMesh('/meshes/takis/scene.gltf');
+    loadedTakisMesh.Material = takis;
+    loadedTakisMesh.TransformMesh({
+        translation: smallBlockTopTransform,
+        rotation: glm.quat.fromEuler(glm.quat.create(), 190, 180, 0),
+        scale: glm.vec3.fromValues(60, 60, 60)
+    });
+    Meshes.push(loadedTakisMesh);
+
     for (const mesh of Meshes)
         mesh.ComputeBVH();
     
     return {
         meshes: Meshes,
         additionalInfo: {
-            meshIndices: [4, 5],
-            meshTransforms: [Meshes[4].GetTransform(), Meshes[5].GetTransform()],
+            meshIndices: [4, 5, 6, 7],
+            meshTransforms: [Meshes[4].GetTransform(), Meshes[5].GetTransform(), Meshes[6].GetTransform(), Meshes[7].GetTransform()],
             meshMaterials: [
                 cube1,
-                cube2
+                cube2,
+                calavera,
+                takis
             ]
         }
     };

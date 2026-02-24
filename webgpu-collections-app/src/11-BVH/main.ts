@@ -823,7 +823,7 @@ class RayTracer
 
         // Texture array creation
         const numTexturesPerMaterial = 4;
-        var numTexturedMaterials = this.meshesInfo?.meshMaterials.filter((mat: Material) => mat.albedoTexture || mat.metalnessTexture || mat.roughnessTexture || mat.normalTexture).length || 0;
+        var numTexturedMaterials = this.meshesInfo?.meshMaterials.filter((mat: Material) => mat.textureIndex >= 0).length || 0;
         if (numTexturedMaterials === 0) numTexturedMaterials = 1;
 
         const commonW = 1024;

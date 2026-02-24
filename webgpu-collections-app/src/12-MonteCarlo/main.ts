@@ -11,6 +11,9 @@ import normalFragWgsl from './normal_frag.wgsl?raw';
 import bvhVertWGSL from './bvh_vert.wgsl?raw';
 import bvhFragWGSL from './bvh_frag.wgsl?raw';
 
+import displayVertWGSL from './display_vert.wgsl?raw';
+import displayFragWGSL from './display_frag.wgsl?raw';
+
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
@@ -92,6 +95,11 @@ interface rayTracerObjects extends PipelineResources
 
     sampler: GPUSampler;
     textureArray: GPUTexture;
+
+    displayPipeline: GPURenderPipeline;
+    displayBindGroupLayout: GPUBindGroupLayout;
+    displayBindGroup: GPUBindGroup;
+    displayShaderModule: ShaderModule | null;
 };
 
 //================================//
@@ -135,11 +143,17 @@ class RayTracer
     private showBVH: boolean = false;
     private bvhDepth: number = Infinity;
     private rayTracerMode: RayTracerMode = RayTracerMode.pathTrace;
-    private ptDepth: number = 3;
-    private ptSamples: number = 1;
+    private ptDepth: number = 6;
+    private ptSamples: number = 64; // Default 8x8 stratified sampling
     private randSeed: number = Math.floor(Math.random() * 0xFFFFFFFF);
     private russianRoulette: boolean = true;
-    private sampleCosine: boolean = true;
+    private frameAccumulation: boolean = true;
+
+    //================================//
+    private accumTexture: GPUTexture | null = null;
+    private renderTexture: GPUTexture | null = null;
+    private frameCount: number = 0;
+    private frameAccumulationReset: boolean = false;
 
     //================================//
     constructor () 
@@ -174,13 +188,14 @@ class RayTracer
         addCheckbox('Use Path Tracing', this.usePathTracing, utilElement, (value) => { this.usePathTracing = value; });
         utilElement.appendChild(document.createElement('br'));
         
-        addSlider('Depth of path tracing', this.ptDepth, 0, 20, 1, utilElement, (value) => { this.ptDepth = value; });
+        addSlider('Depth of path tracing', this.ptDepth, 0, 20, 1, utilElement, (value) => { this.ptDepth = value; this.frameAccumulationReset = true; });
         utilElement.appendChild(document.createElement('br'));
-        addSlider('Path tracing samples', this.ptSamples, 1, 100, 1, utilElement, (value) => { this.ptSamples = value; });
+        addSlider('Path tracing samples', this.ptSamples, 1, 100, 1, utilElement, (value) => { this.ptSamples = value; this.frameAccumulationReset = true; });
 
         utilElement.appendChild(document.createElement('br'));
         addCheckbox('Russian Roulette', this.russianRoulette, utilElement, (value) => { this.russianRoulette = value; });
-        addCheckbox('Sample Cosine', this.sampleCosine, utilElement, (value) => { this.sampleCosine = value; });
+        utilElement.appendChild(document.createElement('br'));
+        addCheckbox('Frame Accumulation', this.frameAccumulation, utilElement, (value) => { this.frameAccumulation = value; this.frameAccumulationReset = true; });
 
         this.lights.forEach((_, index) =>
         {
@@ -205,7 +220,7 @@ class RayTracer
             addButton(`Edit Light ${index + 1}`, utilElement, callback);
         });
         utilElement.appendChild(document.createElement('br'));
-        addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; this.rayTracerMode = value ? RayTracerMode.BVHVisualization : RayTracerMode.pathTrace; });
+        addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; this.rayTracerMode = value ? RayTracerMode.BVHVisualization : RayTracerMode.pathTrace; this.frameAccumulationReset = true; });
         utilElement.appendChild(document.createElement('br'));
         addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
     }
@@ -248,12 +263,47 @@ class RayTracer
         this.rayTracerObjects.shaderModule = CreateShaderModule(this.device, rayTraceVertWGSL, rayTraceFragWGSL, 'Ray Trace Shader Module');
         this.normalObjects.shaderModule = CreateShaderModule(this.device, normalVertWgsl, normalFragWgsl, 'Normal Shader Module');
         this.normalObjects.bvhShaderModule = CreateShaderModule(this.device, bvhVertWGSL, bvhFragWGSL, 'BVH Draw Shader Module');
+        this.rayTracerObjects.displayShaderModule = CreateShaderModule(this.device, displayVertWGSL, displayFragWGSL, 'Display Shader Module');
     }
 
     //================================//
     initializePipelines()
     {
         if (this.device === null || this.presentationFormat === null) return;
+
+        // Display pipeline
+        this.rayTracerObjects.displayBindGroupLayout = this.device.createBindGroupLayout({
+            label: 'Display Bind Group Layout',
+            entries: [{
+                binding: 0,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "float", viewDimension: "2d" },
+            }]
+        });
+        this.rayTracerObjects.displayPipeline = this.device.createRenderPipeline({
+            label: 'Display Pipeline',
+            layout: this.device.createPipelineLayout({
+                label: 'Display Pipeline Layout',
+                bindGroupLayouts: [this.rayTracerObjects.displayBindGroupLayout],
+            }),
+            vertex: {
+                module: this.rayTracerObjects.displayShaderModule!.vertex,
+                entryPoint: 'vs',
+            },
+            fragment: {
+                module: this.rayTracerObjects.displayShaderModule!.fragment,
+                entryPoint: 'fs',
+                targets: [
+                    {
+                        format: this.presentationFormat
+                    }
+                ],
+            },
+            primitive: {
+                topology: "triangle-list",
+                cullMode: "none",
+            },
+        });
 
         // RAY TRACE PIPELINE
         this.rayTracerObjects.bindGroupLayout = this.device.createBindGroupLayout({
@@ -293,6 +343,11 @@ class RayTracer
                     binding: 6, // meshInstances
                     visibility: GPUShaderStage.FRAGMENT,
                     buffer: { type: "read-only-storage" },
+                },
+                {
+                    binding: 7, // Accumulation texture
+                    visibility: GPUShaderStage.FRAGMENT,
+                    texture: { sampleType: "float", viewDimension: "2d" },
                 }
             ],
         });
@@ -333,7 +388,7 @@ class RayTracer
                     entryPoint: 'fs',
                     targets: [
                         {
-                            format: this.presentationFormat
+                            format: 'rgba16float', // Now we render to an offscreen texture
                         }
                     ],
                 }
@@ -767,39 +822,7 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.rayTracerObjects.meshInstancesStorageBuffer, 0, meshInstancesData as BufferSource);
 
-        this.rayTracerObjects.bindGroup = this.device.createBindGroup({
-            label: 'Ray Tracer Bind Group',
-            layout: this.rayTracerObjects.bindGroupLayout,
-            entries: [{
-                    binding: 0,
-                    resource: { buffer: this.rayTracerObjects.uniformBuffer },
-                },
-                {
-                    binding: 1,
-                    resource: { buffer: this.rayTracerObjects.positionStorageBuffer },
-                },
-                {
-                    binding: 2,
-                    resource: { buffer: this.rayTracerObjects.normalStorageBuffer },
-                },
-                {
-                    binding: 3,
-                    resource: { buffer: this.rayTracerObjects.uvStorageBuffer },
-                },
-                {
-                    binding: 4,
-                    resource: { buffer: this.rayTracerObjects.indexStorageBuffer },
-                },
-                {
-                    binding: 5,
-                    resource: { buffer: this.rayTracerObjects.bvhNodesStorageBuffer },
-                },
-                {
-                    binding: 6,
-                    resource: { buffer: this.rayTracerObjects.meshInstancesStorageBuffer },
-                }
-            ],
-        });
+        this.rebuildAccumulationTextures(); // bind group creation in it
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -813,7 +836,7 @@ class RayTracer
 
         // Texture array creation
         const numTexturesPerMaterial = 4;
-        var numTexturedMaterials = this.meshesInfo?.meshMaterials.filter((mat: Material) => mat.albedoTexture || mat.metalnessTexture || mat.roughnessTexture || mat.normalTexture).length || 0;
+        var numTexturedMaterials = this.meshesInfo?.meshMaterials.filter((mat: Material) => mat.textureIndex >= 0).length || 0;
         if (numTexturedMaterials === 0) numTexturedMaterials = 1;
 
         const commonW = 1024;
@@ -979,6 +1002,11 @@ class RayTracer
         this.initializeUtils();
         this.initializeInputHandlers();
 
+        const calaveraMaterial = this.meshesInfo!.meshMaterials[2];
+        this.fetchTextureForMaterial(calaveraMaterial, TextureType.Albedo, 'meshes/calavera/textures/Material.002_baseColor.png');
+
+        const takisMaterial = this.meshesInfo!.meshMaterials[3];
+        this.fetchTextureForMaterial(takisMaterial, TextureType.Albedo, 'meshes/takis/textures/Material.001_baseColor.png');
         this.mainLoop();
     }
 
@@ -1008,8 +1036,8 @@ class RayTracer
 
             const canvasDimensions = new Float32Array([this.canvas!.width, this.canvas!.height]);
             floatView.set(canvasDimensions, 28);
-            floatView[30] = this.sampleCosine ? 1 : 0;
-            floatView[31] = 0.0; // pad
+            floatView[30] = this.frameAccumulation ? 1 : 0;
+            uintView[31] = this.frameCount;
 
             // Area light
             floatView.set(this.lights[0].center, 32);
@@ -1076,6 +1104,37 @@ class RayTracer
             const startTime = performance.now();
 
             this.handleInput();
+
+            if (this.camera.dirty)
+            {
+                this.frameAccumulationReset = true;
+                this.camera.dirty = false;
+            }
+
+            if (this.frameAccumulationReset)
+            {
+                this.frameCount = 0;
+                const encoder = this.device.createCommandEncoder({label: 'Frame Accumulation Reset Encoder'});
+                const pass = encoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: this.renderTexture!.createView(),
+                        loadOp: 'clear', storeOp: 'store',
+                        clearValue: { r: 0, g: 0, b: 0, a: 0 }
+                    }]
+                });
+                pass.end();
+                encoder.copyTextureToTexture(
+                    { texture: this.renderTexture! },
+                    { texture: this.accumTexture! },
+                    [this.canvas.width, this.canvas.height]
+                );
+                this.device.queue.submit([encoder.finish()]);
+                this.frameAccumulationReset = false;
+            }
+
+            if (this.usePathTracing && this.frameAccumulation)
+                this.frameCount++;
+
             this.updateUniforms();
             this.animate();
 
@@ -1086,36 +1145,78 @@ class RayTracer
                 depthStoreOp: 'store' as const,
                 depthClearValue: 1.0,
             } : undefined;
-            const renderPassDescriptor: GPURenderPassDescriptor = {
-                label: 'basic canvas renderPass',
-                colorAttachments: [{
-                    view: textureView,
-                    loadOp: 'clear',
-                    storeOp: 'store',
-                    clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1 }
-                }],
-                depthStencilAttachment: depthStencilAttachment,
-                ... (this.timestampQuerySet != null && {
-                    timestampWrites: {
-                        querySet: this.timestampQuerySet.querySet,
-                        beginningOfPassWriteIndex: 0,
-                        endOfPassWriteIndex: 1,
-                    }
-                }),
-            };
-
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
-            const pass = encoder.beginRenderPass(renderPassDescriptor);
 
             if (this.usePathTracing)
             {
-                pass.setPipeline(this.rayTracerObjects.pipeline);
-                pass.setBindGroup(0, this.rayTracerObjects.bindGroup);
-                pass.setBindGroup(1, this.rayTracerObjects.materialBindGroup);
-                pass.draw(6); // Fullscreen quad
+                const pathTracingPass = encoder.beginRenderPass(
+                {
+                    colorAttachments: [{
+                        view: this.renderTexture!.createView(),
+                        loadOp: 'clear', storeOp: 'store',
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 }
+                    }],
+                    ...(this.timestampQuerySet != null && {
+                        timestampWrites: {
+                            querySet: this.timestampQuerySet.querySet,
+                            beginningOfPassWriteIndex: 0,
+                            endOfPassWriteIndex: 1,
+                        }
+                    }),
+                });
+                pathTracingPass.setPipeline(this.rayTracerObjects.pipeline);
+                pathTracingPass.setBindGroup(0, this.rayTracerObjects.bindGroup);
+                pathTracingPass.setBindGroup(1, this.rayTracerObjects.materialBindGroup);
+                pathTracingPass.draw(6);
+                pathTracingPass.end();
+
+                if (this.frameAccumulation) 
+                {
+                    encoder.copyTextureToTexture(
+                        { texture: this.renderTexture! },
+                        { texture: this.accumTexture! },
+                        [this.canvas.width, this.canvas.height]
+                    );
+                }
+
+                const renderPassDescriptor: GPURenderPassDescriptor = {
+                    label: 'basic canvas renderPass',
+                    colorAttachments: [{
+                        view: textureView,
+                        loadOp: 'clear',
+                        storeOp: 'store',
+                        clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1 }
+                    }],
+                    depthStencilAttachment: depthStencilAttachment,
+                };
+
+                const displayPass = encoder.beginRenderPass(renderPassDescriptor);
+                displayPass.setPipeline(this.rayTracerObjects.displayPipeline);
+                displayPass.setBindGroup(0, this.rayTracerObjects.displayBindGroup);
+                displayPass.draw(6);
+                displayPass.end();
             }
             else
             {
+                const renderPassDescriptor: GPURenderPassDescriptor = {
+                    label: 'basic canvas renderPass',
+                    colorAttachments: [{
+                        view: textureView,
+                        loadOp: 'clear',
+                        storeOp: 'store',
+                        clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1 }
+                    }],
+                    depthStencilAttachment: depthStencilAttachment,
+                    ... (this.timestampQuerySet != null && {
+                        timestampWrites: {
+                            querySet: this.timestampQuerySet.querySet,
+                            beginningOfPassWriteIndex: 0,
+                            endOfPassWriteIndex: 1,
+                        }
+                    }),
+                };
+
+                const pass = encoder.beginRenderPass(renderPassDescriptor);
                 pass.setPipeline(this.normalObjects.pipeline);
                 pass.setBindGroup(0, this.normalObjects.bindGroup);
                 for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
@@ -1141,8 +1242,8 @@ class RayTracer
                         pass.draw(this.normalObjects.bvhLineCounts[i]);   
                     }
                 }
+                pass.end();
             }
-            pass.end();
 
             if (this.timestampQuerySet != null)
             {
@@ -1180,7 +1281,6 @@ class RayTracer
                 `
                 this.infoElement.textContent = content;
             }
-
             this.animationFrameId = requestAnimationFrame(render);
         }
         this.animationFrameId = requestAnimationFrame(render);
@@ -1199,7 +1299,8 @@ class RayTracer
                     setCameraAspect(this.camera, this.canvas.width / this.canvas.height);
                     
                     // Recreate depth texture with new size
-                    if (this.normalObjects.depthTexture) {
+                    if (this.normalObjects.depthTexture) 
+                    {
                         this.normalObjects.depthTexture.destroy();
                         this.normalObjects.depthTexture = this.device.createTexture({
                             size: [this.canvas.width, this.canvas.height],
@@ -1207,6 +1308,8 @@ class RayTracer
                             usage: GPUTextureUsage.RENDER_ATTACHMENT,
                         });
                     }
+
+                    this.rebuildAccumulationTextures();
                 }
             }
         });
@@ -1271,6 +1374,8 @@ class RayTracer
         // RAY TRACING
         const offset = materialBufferIndex * MATERIAL_SIZE * 4;
         this.device!.queue.writeBuffer(this.rayTracerObjects.materialBuffer, offset, materialData as BufferSource);
+
+        this.frameAccumulationReset = true;
     }
 
     //================================//
@@ -1404,7 +1509,7 @@ class RayTracer
         for (let i = 0; i < potentialMeshes.length; i++)
         {
             const mesh = potentialMeshes[i];
-            const dist = mesh.intersectMeshWithRay(ray, this.bvhDepth);
+            const dist = mesh.intersectMeshWithRay(ray, 4);
 
             if (dist < 0) continue;
 
@@ -1413,6 +1518,8 @@ class RayTracer
                 currentClosestDistance = dist;
                 currentClosestMeshIndex = i;
             }
+
+            console.log(`Mesh ${i} intersection distance:`, dist);
         }
 
         return currentClosestMeshIndex;
@@ -1450,6 +1557,53 @@ class RayTracer
         setTimeout(() => {
             document.addEventListener('mousedown', closeOnClickOutside);
         }, 0);
+    }
+
+    //================================//
+    rebuildAccumulationTextures()
+    {
+        this.accumTexture?.destroy();
+        this.renderTexture?.destroy();
+
+        this.accumTexture = this.device!.createTexture({
+            label: 'Accumulation Texture',
+            size: [this.canvas!.width, this.canvas!.height],
+            format: 'rgba16float',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        
+        this.renderTexture = this.device!.createTexture({
+            label: 'Render Target Texture',
+            size: [this.canvas!.width, this.canvas!.height],
+            format: 'rgba16float',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING,
+        });
+
+        this.frameAccumulationReset = true;
+
+        // Rebuild bind groups
+        this.rayTracerObjects.bindGroup = this.device!.createBindGroup({
+            label: 'Ray Tracer Bind Group',
+            layout: this.rayTracerObjects.bindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.rayTracerObjects.uniformBuffer } },
+                { binding: 1, resource: { buffer: this.rayTracerObjects.positionStorageBuffer } },
+                { binding: 2, resource: { buffer: this.rayTracerObjects.normalStorageBuffer } },
+                { binding: 3, resource: { buffer: this.rayTracerObjects.uvStorageBuffer } },
+                { binding: 4, resource: { buffer: this.rayTracerObjects.indexStorageBuffer } },
+                { binding: 5, resource: { buffer: this.rayTracerObjects.bvhNodesStorageBuffer } },
+                { binding: 6, resource: { buffer: this.rayTracerObjects.meshInstancesStorageBuffer } },
+                { binding: 7, resource: this.accumTexture.createView() },
+            ],
+        });
+
+        this.rayTracerObjects.displayBindGroup = this.device!.createBindGroup({
+            label: 'Display Bind Group',
+            layout: this.rayTracerObjects.displayBindGroupLayout,
+            entries: [
+                { binding: 0, resource: this.renderTexture.createView() },
+            ],
+        });
     }
 
     //================================//

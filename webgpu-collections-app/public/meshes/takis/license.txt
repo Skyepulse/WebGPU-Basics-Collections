@@ -1,0 +1,11 @@
+Model Information:
+* title:	Takis Fuego - México
+* source:	https://sketchfab.com/3d-models/takis-fuego-mexico-7426e5fa188344668ec3b9dbab348bae
+* author:	Luiss Maker (https://sketchfab.com/thelunesshow0202)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Takis Fuego - México" (https://sketchfab.com/3d-models/takis-fuego-mexico-7426e5fa188344668ec3b9dbab348bae) by Luiss Maker (https://sketchfab.com/thelunesshow0202) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

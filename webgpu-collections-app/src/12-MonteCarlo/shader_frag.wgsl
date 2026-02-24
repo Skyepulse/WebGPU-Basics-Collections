@@ -35,8 +35,8 @@ struct Uniform
     roulette: f32,
 
     canvasDimensions: vec2f, // 16
-    sampleCosine: f32,  
-    pad3: f32,
+    frameAccumulation: f32,  
+    frameCount: u32,
 
     light: AreaLight, // 64 bytes
 }; // Total: 64 + 16 + 16 + 16 + 16 + 64 = 192 bytes
@@ -117,6 +117,7 @@ struct VertexOutput
 @group(0) @binding(4) var<storage, read> indices: array<u32>;
 @group(0) @binding(5) var<storage, read> bvhNodes: array<BVHNode>;
 @group(0) @binding(6) var<storage, read> meshInstances: array<MeshInstance>;
+@group(0) @binding(7) var accumTexture: texture_2d<f32>;
 
 @group(1) @binding(0) var<storage, read> materials: array<f32>;
 @group(1) @binding(1) var materialSampler: sampler;
@@ -256,7 +257,7 @@ fn rayTriangleIntersect(ray: Ray, triIndex: u32, hitCoord: ptr<function, vec3f>)
 
     let kEpsilon: f32 = 0.000001;
 
-    if (det < kEpsilon) 
+    if (abs(det) < kEpsilon) 
     {
         return false;
     }
@@ -412,7 +413,8 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
 
         var localRay: Ray;
         localRay.origin = (inst.inverseWorldMatrix * vec4f(ray.origin, 1.0)).xyz;
-        localRay.direction = (inst.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
+        let rawDir = (inst.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
+        localRay.direction = normalize(rawDir);
 
         let invDir = vec3f(1.0 / localRay.direction.x, 1.0 / localRay.direction.y, 1.0 / localRay.direction.z);
 
@@ -485,11 +487,16 @@ fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>, maxDist: f32, shadow: bool) -
 
         var localRay: Ray;
         localRay.origin = (meshInstance.inverseWorldMatrix * vec4f(ray.origin, 1.0)).xyz;
-        localRay.direction = (meshInstance.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
+        let rawDir = (meshInstance.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
+        let dirScale = length(rawDir);
+        localRay.direction = rawDir / dirScale;
 
-        if (traverseBVH(localRay, meshInstance, &closestT, hit, shadow, j))
+        var closestTLocal = closestT * dirScale;
+
+        if (traverseBVH(localRay, meshInstance, &closestTLocal, hit, shadow, j))
         {
             hitSomething = true;
+            closestT = closestTLocal / dirScale;
             if (shadow)
             {
                 return true;
@@ -499,6 +506,7 @@ fn rayTraceOnce(ray: Ray, hit: ptr<function, Hit>, maxDist: f32, shadow: bool) -
 
     if (hitSomething)
     {
+        (*hit).distance = closestT;
         let inst = meshInstances[(*hit).instanceIndex];
         let normalMatrix = transpose(mat3x3f(
             inst.inverseWorldMatrix[0].xyz,
@@ -584,22 +592,8 @@ fn pathTrace(initialRay: Ray, maxDepth: u32) -> vec3f
             albedo = textureSampleLevel(textures, materialSampler, hit.uvAtHit, i32(mat.textureIndex) * 4, 2.0).rgb;
         }
 
-        var newDir: vec3f;
-        if (uniforms.sampleCosine > 0.5)
-        {
-            newDir = sampleUniformCosine(normal);
-        }
-        else
-        {
-            newDir = sampleHemisphereUniform(normal);
-        }
-
-        let cosTheta = max(dot(newDir, normal), 0.0);
-
-        // Lambert BRDF = albedo / pi
-        // Uniform hemisphere PDF = 1 / (2 * pi)
-        // Weight = BRDF * cosTheta / PDF = (albedo/pi) * cosTheta * 2*pi = 2 * albedo * cosTheta
-        throughput *= 2.0 * albedo * cosTheta;
+        var newDir = sampleUniformCosine(normal);
+        throughput *= albedo;
 
         // RUSSIAN ROULETTE
         if (depth >= 2u && uniforms.roulette > 0.5)
@@ -757,12 +751,12 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
     var hit: Hit;
     var color: vec3f = vec3f(0.0, 0.0, 0.0);
 
-    if (uniforms.mode == 0u)
+    let n = uniforms.numSamples;
+    let stratSize = u32(ceil(sqrt(f32(n))));
+
+    if (uniforms.frameAccumulation < 0.5 )
     {
         var totalColor = vec3f(0.0, 0.0, 0.0);
-        let n = uniforms.numSamples;
-        let stratSize = u32(ceil(sqrt(f32(n))));
-
         var sampleIndex = 0u;
         for (var sy = 0u; sy < stratSize; sy++)
         {
@@ -790,35 +784,26 @@ fn fs(input: VertexOutput) -> @location(0) vec4f
 
         color = totalColor / f32(n);
     }
-    else if (uniforms.mode == 2u)
+    else // One sample per frame, accumulate in texture
     {
-        if (rayTraceOnce(ray, &hit, maxDistance, false))
-        {
-            let normal = hit.normalAtHit;
-            color = normal * 0.5 + vec3f(0.5, 0.5, 0.5);
-        }
-        else
-        {
-            color = vec3f(0.0, 0.0, 0.0);
-        }
-    }
-    else if (uniforms.mode == 3u)
-    {
-        if (rayTraceOnce(ray, &hit, maxDistance, false))
-        {
-            let distance = hit.distance;
-            let intensity = 1.0 - min(distance / maxDistance, 1.0);
-            color = vec3f(intensity, intensity, intensity);
-        }
-        else
-        {
-            color = vec3f(0.0, 0.0, 0.0);
-        }
-    }
-    else if (uniforms.mode == 4u)
-    {
-        let dir = normalize(ray.direction);
-        color = dir;
+        initRNG(input.position.xy, uniforms.frameCount - 1u);
+        let stratIndex = (uniforms.frameCount - 1u) % (stratSize * stratSize);
+        let stratumOffset = vec2f(
+            (f32(stratIndex % stratSize) + rand()) / f32(stratSize),
+            (f32(stratIndex / stratSize) + rand()) / f32(stratSize)
+        );
+    
+        let jitteredUV = vec2f(
+            (input.position.x - 1.0 + stratumOffset.x) / uniforms.canvasDimensions.x,
+            1.0 - (input.position.y - 1.0 + stratumOffset.y) / uniforms.canvasDimensions.y
+        );
+        let sampleRay = ray_at(jitteredUV);
+        let newSample = pathTrace(sampleRay, uniforms.ptDepth);
+        
+        let oldColor = textureLoad(accumTexture, vec2i(input.position.xy), 0).rgb;
+        
+        let divider = f32(uniforms.frameCount);
+        color = oldColor + (newSample - oldColor) / divider;
     }
     
     return vec4f(color, 1.0);

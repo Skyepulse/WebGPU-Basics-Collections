@@ -23,6 +23,8 @@ interface Camera
 
     viewMatrix: Float32Array;
     projectionMatrix: Float32Array;
+
+    dirty: boolean;
 }
 
 //================================//
@@ -48,6 +50,8 @@ export function createCamera(aspect: number): Camera
 
         viewMatrix: mat4Identity(),
         projectionMatrix: mat4Perspective(Math.PI / 4, aspect, 0.1, 1000),
+
+        dirty: true,
     };
 
     updateCameraVectors(camera);
@@ -276,12 +280,16 @@ function updateViewMatrix(camera: Camera): void
         camera.position[2] + camera.forward[2],
     ]);
     camera.viewMatrix = mat4LookAt(camera.position, target, camera.up);
+
+    camera.dirty = true;
 }
 
 //================================//
 function updateProjectionMatrix(camera: Camera): void
 {
     camera.projectionMatrix = mat4Perspective(camera.fovY, camera.aspect, camera.near, camera.far);
+
+    camera.dirty = true;
 }
 
 //================================//

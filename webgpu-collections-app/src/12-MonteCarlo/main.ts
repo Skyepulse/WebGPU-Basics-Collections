@@ -35,6 +35,7 @@ export async function startup_12(canvas: HTMLCanvasElement)
 //================================//
 const normalUniformDataSize = 224;
 const rayTracerUniformDataSize = 192;
+const displayUniformDataSize = 16; // 4 floats
 const meshInstanceSize = 20 * 4; // 16 byte matrix, + 4 floats
 
 //================================//
@@ -98,6 +99,7 @@ interface rayTracerObjects extends PipelineResources
     displayBindGroupLayout: GPUBindGroupLayout;
     displayBindGroup: GPUBindGroup;
     displayShaderModule: ShaderModule | null;
+    displayUniformBuffer: GPUBuffer;
 };
 
 //================================//
@@ -152,6 +154,7 @@ class RayTracer
     private renderTexture: GPUTexture | null = null;
     private frameCount: number = 0;
     private frameAccumulationReset: boolean = false;
+    private denoiseRenderTexture: boolean = false;
 
     //================================//
     constructor () 
@@ -194,6 +197,8 @@ class RayTracer
         addCheckbox('Russian Roulette', this.russianRoulette, utilElement, (value) => { this.russianRoulette = value; });
         utilElement.appendChild(document.createElement('br'));
         addCheckbox('Frame Accumulation', this.frameAccumulation, utilElement, (value) => { this.frameAccumulation = value; this.frameAccumulationReset = true; });
+        utilElement.appendChild(document.createElement('br'));
+        addCheckbox('Denoise Render Texture', this.denoiseRenderTexture, utilElement, (value) => { this.denoiseRenderTexture = value; });
 
         const pathTraceSelect = document.createElement('select');
         pathTraceSelect.style.color = 'black';
@@ -295,6 +300,11 @@ class RayTracer
                 binding: 0,
                 visibility: GPUShaderStage.FRAGMENT,
                 texture: { sampleType: "float", viewDimension: "2d" },
+            }, 
+            {
+                binding: 1,
+                visibility: GPUShaderStage.FRAGMENT,
+                buffer: { type: "uniform" },
             }]
         });
         this.rayTracerObjects.displayPipeline = this.device.createRenderPipeline({
@@ -839,6 +849,11 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.rayTracerObjects.meshInstancesStorageBuffer, 0, meshInstancesData as BufferSource);
 
+        this.rayTracerObjects.displayUniformBuffer = this.device.createBuffer({
+            label: 'Display Uniform Buffer',
+            size: displayUniformDataSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
         this.rebuildAccumulationTextures(); // bind group creation in it
 
         // material buffer for ray tracer
@@ -1074,6 +1089,15 @@ class RayTracer
             floatView[46] = 0.0;
             floatView[47] = 0.0;
             this.device.queue.writeBuffer(this.rayTracerObjects.uniformBuffer, 0, data);
+
+            const displayData = new ArrayBuffer(displayUniformDataSize);
+            const displayFloatView = new Float32Array(displayData);
+            const displayUintView = new Uint32Array(displayData);
+            displayUintView[0] = this.frameCount;
+            displayFloatView[1] = this.denoiseRenderTexture ? 1 : 0;
+            displayUintView[2] = 0;
+            displayUintView[3] = 0;
+            this.device.queue.writeBuffer(this.rayTracerObjects.displayUniformBuffer, 0, displayData);
         }
         else
         {
@@ -1625,6 +1649,7 @@ class RayTracer
             layout: this.rayTracerObjects.displayBindGroupLayout,
             entries: [
                 { binding: 0, resource: this.renderTexture.createView() },
+                { binding: 1, resource : { buffer: this.rayTracerObjects.displayUniformBuffer } },
             ],
         });
     }

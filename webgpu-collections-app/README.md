@@ -1,5 +1,25 @@
-# Vue 3 + TypeScript + Vite
+# CURRENT SHOWCASE:
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+1 - Basic Start.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+2 - Basic compute shader dispatch.
+
+3 - Start on Variables and Uniforms.
+
+4 - Instancing via Storage Buffers.
+
+5 - Index and Vertex Buffers.
+
+6 - Textures and Video insertion.
+
+7 - Small Rigidbody sim game;
+
+8 - Basic Raytracing
+
+9 - Basic transparency in rasterize pipeline.
+
+10 - First introduction to PBR materials and lambert shading
+
+11 - Advanced Ray Tracing accelerated with SAH BVH, microfacet BRDF rendering.
+
+12 - Monte Carlo Path Tracing, Crook Torrance algorithm for rendering.

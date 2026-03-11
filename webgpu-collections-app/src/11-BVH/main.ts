@@ -32,7 +32,7 @@ export async function startup_11(canvas: HTMLCanvasElement)
 //================================//
 const normalUniformDataSize = (16 * 2) * 4 + (2 * 4) * 4 + (48 * 3);
 const rayTracerUniformDataSize = 224 + 16*4 + 16;
-const meshInstanceSize = 20 * 4; // 16 byte matrix, + 4 floats
+const meshInstanceSize = 24 * 4; // 16 byte matrix, + 4 floats, + numBvhNodes + 3 pads
 
 //================================//
 enum RayTracerMode
@@ -708,6 +708,7 @@ class RayTracer
             uint32View[17] = triangleOffset;
             uint32View[18] = vertexOffset;
             uint32View[19] = matNum;
+            uint32View[20] = bvhNodeCount;
             flattenedMeshInstances.push(...float32View);
 
             indexOffset += mesh.getNumVertices();

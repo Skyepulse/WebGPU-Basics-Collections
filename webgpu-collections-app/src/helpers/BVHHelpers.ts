@@ -463,32 +463,50 @@ export class BVH
         const float32View = new Float32Array(data);
         const uint32View = new Uint32Array(data);
 
-        for (let i = 0; i < this.Nodes.length; ++i)
+        const subtreeSize = (nodeIndex: number): number =>
         {
-            const base = i * 8;
-            const node = this.Nodes[i];
+            const node = this.Nodes[nodeIndex];
+            if (node.triangleCount > 0) return 1;
+            return 1 + subtreeSize(node.startIndex) + subtreeSize(node.startIndex + 1);
+        };
 
-            float32View[base + 0] = node.minBounds[0];
-            float32View[base + 1] = node.minBounds[1];
-            float32View[base + 2] = node.minBounds[2];
+        let outputIndex = 0;
 
+        const flattenDFS = (nodeIndex: number, missLink: number): void =>
+        {
+            const myOutputIndex = outputIndex++;
+            const node = this.Nodes[nodeIndex];
 
-            float32View[base + 4] = node.maxBounds[0];
-            float32View[base + 5] = node.maxBounds[1];
-            float32View[base + 6] = node.maxBounds[2];
+            float32View[myOutputIndex * 8 + 0] = node.minBounds[0];
+            float32View[myOutputIndex * 8 + 1] = node.minBounds[1];
+            float32View[myOutputIndex * 8 + 2] = node.minBounds[2];
 
-            uint32View[base + 7] = node.triangleCount > 0 ? node.triangleCount : 0;
+            float32View[myOutputIndex * 8 + 4] = node.maxBounds[0];
+            float32View[myOutputIndex * 8 + 5] = node.maxBounds[1];
+            float32View[myOutputIndex * 8 + 6] = node.maxBounds[2];
 
-            if (node.triangleCount > 0) 
+            uint32View[myOutputIndex * 8 + 7] = node.triangleCount > 0 ? node.triangleCount : 0;
+
+            if (node.triangleCount > 0)
             {
-                uint32View[base + 3] = node.startIndex;
-            } 
-            else 
+                uint32View[myOutputIndex * 8 + 3] = node.startIndex;
+            }
+            else
             {
-                uint32View[base + 3] = node.startIndex + nodeOffset;
-            } 
-        }
+                // Internal: store global missLink. Left child is implicitly at myOutputIndex + 1.
+                // missLink also equals the right child's output index (first node after left subtree).
+                uint32View[myOutputIndex * 8 + 3] = missLink + nodeOffset;
 
-        return { data, numNodes: this.Nodes.length };
+                const leftIdx = node.startIndex;
+                const rightChildLocalIndex = myOutputIndex + 1 + subtreeSize(leftIdx);
+
+                flattenDFS(leftIdx, rightChildLocalIndex);
+                flattenDFS(node.startIndex + 1, missLink);
+            }
+        };
+
+        flattenDFS(0, numNodes);
+
+        return { data, numNodes };
     }
 }

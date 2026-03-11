@@ -101,7 +101,12 @@ struct MeshInstance
     vertOffset: u32,
     matIndex: u32,
 
-};
+    numBvhNodes: u32,
+    _pad4: u32,
+    _pad5: u32,
+    _pad6: u32,
+
+}; // Total: 64 + 4*4 + 4*4 = 96 bytes
 
 // ============================== //
 struct VertexOutput 
@@ -336,24 +341,22 @@ fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: 
 {
     let invDir = vec3f(1.0 / ray.direction.x, 1.0 / ray.direction.y, 1.0 / ray.direction.z);
 
-    var stack: array<u32, 32>;
-    var stackPtr: i32 = 0;
-
-    stack[0] = inst.bvhRootIndex;
-    stackPtr = 1;
+    var index = inst.bvhRootIndex;
+    let endIndex = inst.bvhRootIndex + inst.numBvhNodes;
 
     var hitAnything: bool = false;
     var numBoxQueries: u32 = 0u;
     var numTriangleQueries: u32 = 0u;
 
-    while (stackPtr > 0)
+    while (index < endIndex)
     {
-        stackPtr = stackPtr - 1;
-        let nodeIndex = stack[stackPtr];
-        let node: BVHNode = bvhNodes[nodeIndex];
+        let node: BVHNode = bvhNodes[index];
 
         if (!rayAABBIntersect(ray, invDir, node.minB, node.maxB, (*closestT)))
         {
+            // Miss: for internal nodes jump to missLink (stored in leftOrFirst),
+            // for leaves advance by 1 (leaf subtree size is always 1).
+            if (node.count > 0u) { index++; } else { index = node.leftOrFirst; }
             continue;
         }
 
@@ -396,31 +399,10 @@ fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: 
                     }
                 }
             }
-        }
+            index++;
         else
         {
-            let leftIdx = node.leftOrFirst;
-            let rightIdx = node.leftOrFirst + 1u;
-
-            let leftNode = bvhNodes[leftIdx];
-            let rightNode = bvhNodes[rightIdx];
-
-            let leftCenter = (leftNode.minB + leftNode.maxB) * 0.5;
-            let rightCenter = (rightNode.minB + rightNode.maxB) * 0.5;
-
-            let leftDist = dot(leftCenter - ray.origin, ray.direction);
-            let rightDist = dot(rightCenter - ray.origin, ray.direction);
-
-            if (leftDist < rightDist)
-            {
-                stack[stackPtr] = rightIdx; stackPtr += 1;
-                stack[stackPtr] = leftIdx;  stackPtr += 1;
-            }
-            else
-            {
-                stack[stackPtr] = leftIdx;  stackPtr += 1;
-                stack[stackPtr] = rightIdx; stackPtr += 1;
-            }
+            index++;
         }
     }
 
@@ -479,9 +461,10 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
                 leafTriCount += node.count;
                 continue;
             }
-
-            let leftIdx = node.leftOrFirst;
-            let rightIdx = node.leftOrFirst + 1u;
+            
+            let leftIdx = nodeIndex + 1u;
+            let leftChild = bvhNodes[leftIdx];
+            let rightIdx = select(leftChild.leftOrFirst, leftIdx + 1u, leftChild.count > 0u);
             stackNode[stackPtr] = rightIdx;
             stackDepth[stackPtr] = depth + 1u;
             stackPtr += 1;

@@ -25,6 +25,17 @@ export interface PipelineResources
     shaderModule: ShaderModule | null;
 }
 
+export interface ComputePipelineResources
+{
+    bindGroupLayout: GPUBindGroupLayout;
+    bindGroup: GPUBindGroup;
+
+    pipelineLayout: GPUPipelineLayout;
+    pipeline: GPUComputePipeline;
+
+    shaderModule: GPUShaderModule | null;
+}
+
 //============== METHODS ==================//
 
 /*

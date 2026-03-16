@@ -71,6 +71,37 @@ export function addCheckbox(label: string, checkValue: boolean, utilElement: HTM
 }
 
 //================================//
+export function addNumberInput(label: string, value: number, min: number, max: number, step: number, utilElement: HTMLElement, onChange: (value: number) => void): HTMLInputElement
+{
+    const labelElement = document.createElement('label');
+    labelElement.textContent = label;
+    labelElement.htmlFor = `number-${label}`;
+
+    const numberInput = document.createElement('input');
+    numberInput.type = 'number';
+    numberInput.id = `number-${label}`;
+    numberInput.value = value.toString();
+    numberInput.min = min.toString();
+    numberInput.max = max.toString();
+    numberInput.step = step.toString();
+    numberInput.tabIndex = -1;
+    numberInput.style.cssText = `
+        margin-left: 16px;
+        transform: scale(1.2);
+        cursor: pointer;
+    `;
+    numberInput.addEventListener('change', () => {
+        const val = parseFloat(numberInput.value);
+        onChange(isNaN(val) ? 0 : val);
+    });
+
+    utilElement.appendChild(labelElement);
+    utilElement.appendChild(numberInput);
+
+    return numberInput;
+}
+
+//================================//
 export function addSlider(label: string, value: number, min: number, max: number, step: number, utilElement: HTMLElement, onChange: (value: number) => void): HTMLInputElement
 {
     const labelElement = document.createElement('label');

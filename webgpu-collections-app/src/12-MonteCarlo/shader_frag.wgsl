@@ -400,6 +400,7 @@ fn traverseBVH(ray: Ray, inst: MeshInstance, closestT: ptr<function, f32>, hit: 
                 }
             }
             index++;
+        }
         else
         {
             index++;

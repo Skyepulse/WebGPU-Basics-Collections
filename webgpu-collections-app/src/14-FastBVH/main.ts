@@ -20,6 +20,7 @@ import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
 import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
 import patriciaTreeWGSL from './FastBVHShaders/patriciaTree.wgsl?raw';
 import AABBWGSL from './FastBVHShaders/AABB.wgsl?raw';
+import wireframeWGSL from './FastBVHShaders/wireframe.wgsl?raw';
 
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
@@ -57,6 +58,7 @@ interface PrefixSumLevel
 
 const BVHNodeSize = 48;
 const LeafAABBSize = 32;
+const floatsPerNode = 24 * 3;
 //================================//
 class FastParallelBVH
 {
@@ -144,6 +146,16 @@ class FastParallelBVH
     private aabbSortedIndexBuffer!: GPUBuffer;
     private leafAABBsBuffer!: GPUBuffer;
 
+    //=============== Wireframe Visualization objects =================//
+    private wireframeShaderModule!: GPUShaderModule;
+    private wireframePipelineLayout!: GPUPipelineLayout;
+    private wireframeBindGroupLayout!: GPUBindGroupLayout;
+    private wireframePipeline!: GPUComputePipeline;
+    private wireframeBindGroup!: GPUBindGroup;
+    public wireframeVertexBuffer!: GPUBuffer;
+    public wireframeVertexCount: number = 0;
+    public wireframeDepthBuffer!: GPUBuffer;
+
     //================================//
     constructor()
     {
@@ -156,6 +168,8 @@ class FastParallelBVH
         this.dispatchMortonPass(commandEncoder);
         this.dispatchRadixSort(commandEncoder);
         this.dispatchPatriciaTreePass(commandEncoder);
+        this.dispatchAABBPass(commandEncoder);
+        this.dispatchWireframePass(commandEncoder);
     }
 
     //================================//
@@ -680,6 +694,67 @@ class FastParallelBVH
         commandEncoder.setBindGroup(0, this.aabbBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
     }
+
+    //============== Wireframe Visualization Methods ==================//
+    initializeWireframePipeline(device: GPUDevice, initialDepth: number)
+    {
+        const totalNodes = (this.numTriangles - 1) + this.numTriangles; // internal + leaf
+        this.wireframeVertexCount = totalNodes * 24;
+
+        this.wireframeVertexBuffer = device.createBuffer({
+            label: 'FastBVH Wireframe Vertex Buffer',
+            size: totalNodes * floatsPerNode * 4,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE,
+        });
+
+        this.wireframeDepthBuffer = device.createBuffer({
+            label: 'FastBVH Wireframe Depth Uniform Buffer',
+            size: 16,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(this.wireframeDepthBuffer, 0, new Uint32Array([initialDepth]));
+
+        this.wireframeShaderModule = device.createShaderModule({ label: 'Wireframe Shader Module', code: wireframeWGSL });
+        this.wireframeBindGroupLayout = device.createBindGroupLayout({
+            label: 'Wireframe Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // internalNodes
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leafAABBs
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // wireframeVerts
+                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leafParents
+                        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }]           // depthUniforms
+        });
+        this.wireframePipelineLayout = device.createPipelineLayout({ label: 'Wireframe Pipeline Layout', bindGroupLayouts: [this.wireframeBindGroupLayout] });
+        this.wireframePipeline = device.createComputePipeline({
+            label: 'Wireframe Pipeline',
+            layout: this.wireframePipelineLayout,
+            compute: {
+                module: this.wireframeShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, INTERNAL_NODE_COUNT: this.numTriangles - 1, LEAF_NODE_COUNT: this.numTriangles }
+            }
+        });
+        this.wireframeBindGroup = device.createBindGroup({
+            label: 'Wireframe Bind Group',
+            layout: this.wireframeBindGroupLayout,
+            entries: [  { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                        { binding: 1, resource: { buffer: this.leafAABBsBuffer } },
+                        { binding: 2, resource: { buffer: this.wireframeVertexBuffer } },
+                        { binding: 3, resource: { buffer: this.aabbLeafNodesBuffer } }, // leafParents (u32 per-leaf parent index)
+                        { binding: 4, resource: { buffer: this.wireframeDepthBuffer } }]
+        });
+    }
+
+    //================================//
+    dispatchWireframePass(commandEncoder: GPUComputePassEncoder)
+    {
+        if (!this.wireframePipeline || !this.wireframeBindGroup) return;
+
+        const totalNodes = (this.numTriangles - 1) + this.numTriangles;
+        const dispatchX = Math.ceil(totalNodes / this.THREADS_PER_WORKGROUP);
+        commandEncoder.setPipeline(this.wireframePipeline);
+        commandEncoder.setBindGroup(0, this.wireframeBindGroup);
+        commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+    }
 }
 //============== END PAPER IMPLEMENTATION ==================//
 
@@ -802,8 +877,14 @@ class RayTracer
 
     //================================//
     private showBVH: boolean = false;
+    private showFastBVH: boolean = false;
     private bvhDepth: number = Infinity;
+    private fastBVHDepth: number = 10;
     private minMaxBoundsText: string = '';
+
+    //================================//
+    private fastBVHIdentityBuffer: GPUBuffer | null = null;
+    private fastBVHWireframeBindGroup: GPUBindGroup | null = null;
 
     //================================//
     private fastBVH: FastParallelBVH = new FastParallelBVH();
@@ -890,6 +971,10 @@ class RayTracer
         });
         utilElement.appendChild(document.createElement('br'));
         addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; this.rayTracerMode = value ? RayTracerMode.BVHVisualization : RayTracerMode.raytrace; });
+        utilElement.appendChild(document.createElement('br'));
+        addCheckbox('Show FastBVH', this.showFastBVH, utilElement, (value) => { this.showFastBVH = value; });
+        utilElement.appendChild(document.createElement('br'));
+        addSlider('FastBVH Depth', this.fastBVHDepth, 1, 30, 1, utilElement, (value) => { this.fastBVHDepth = value; if (this.device) this.device.queue.writeBuffer(this.fastBVH.wireframeDepthBuffer, 0, new Uint32Array([value])); });
         utilElement.appendChild(document.createElement('br'));
         addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
         utilElement.appendChild(document.createElement('br'));
@@ -1506,6 +1591,32 @@ class RayTracer
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
         this.fastBVH.initializeAABBPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer);
+        this.fastBVH.initializeWireframePipeline(this.device, this.fastBVHDepth);
+
+        // Identity matrix buffer
+        const identityMat = new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+        this.fastBVHIdentityBuffer = this.device.createBuffer({
+            label: 'FastBVH Identity Matrix Buffer',
+            size: 16 * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.fastBVHIdentityBuffer, 0, identityMat);
+
+        const placeholderTex = createPlaceholderTexture(this.device, 1024, 32);
+        this.fastBVHWireframeBindGroup = this.device.createBindGroup({
+            label: 'FastBVH Wireframe Draw Bind Group',
+            layout: this.normalObjects.materialUniformBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.normalObjects.materialUniforms[0] } },
+                { binding: 1, resource: this.normalObjects.sampler },
+                { binding: 2, resource: placeholderTex.createView() },
+                { binding: 3, resource: placeholderTex.createView() },
+                { binding: 4, resource: placeholderTex.createView() },
+                { binding: 5, resource: placeholderTex.createView() },
+                { binding: 6, resource: { buffer: this.fastBVHIdentityBuffer } },
+                { binding: 7, resource: { buffer: this.fastBVHIdentityBuffer } },
+            ],
+        });
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -1924,7 +2035,7 @@ class RayTracer
                     pass.drawIndexed(this.normalObjects.indexBuffers[matNum].size / 2, 1, 0, 0, 0);
                 }
 
-                // BVH Rendering
+                // CPU BVH Rendering
                 if (this.showBVH)
                 {
                     pass.setPipeline(this.normalObjects.bvhDrawPipeline);
@@ -1933,8 +2044,18 @@ class RayTracer
                     {
                         pass.setBindGroup(1, this.normalObjects.materialBindGroups[i]);
                         pass.setVertexBuffer(0, this.normalObjects.bvhLineGeometryBuffers[i]);
-                        pass.draw(this.normalObjects.bvhLineCounts[i]);   
+                        pass.draw(this.normalObjects.bvhLineCounts[i]);
                     }
+                }
+
+                // FastBVH (GPU-built) Wireframe Rendering
+                if (this.showFastBVH && this.fastBVHWireframeBindGroup)
+                {
+                    pass.setPipeline(this.normalObjects.bvhDrawPipeline);
+                    pass.setBindGroup(0, this.normalObjects.bindGroup);
+                    pass.setBindGroup(1, this.fastBVHWireframeBindGroup);
+                    pass.setVertexBuffer(0, this.fastBVH.wireframeVertexBuffer);
+                    pass.draw(this.fastBVH.wireframeVertexCount);
                 }
             }
             pass.end();

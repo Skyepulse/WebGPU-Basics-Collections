@@ -64,7 +64,7 @@ class FastParallelBVH
     private THREADS_PER_WORKGROUP = 256;
     private SIZE_X = 16;
     private SIZE_Y = 16;
-    private numTriangles: number = 0;
+    numTriangles: number = 0;
     private ITEMS_PER_WORKGROUP = 2 * this.THREADS_PER_WORKGROUP;
     private BIT_COUNT = 30;
     private NUM_PASSES = this.BIT_COUNT / 2;
@@ -725,8 +725,8 @@ class RayTracer
         setCameraPosition(this.camera, 0, 100, -200);
         rotateCameraBy(this.camera, 0, -0.5);
         setCameraNearFar(this.camera, 0.1, 2000);
-        this.camera.moveSpeed = 20.0;
-        this.camera.rotateSpeed = 0.05;
+        this.camera.moveSpeed = 5.0;
+        this.camera.rotateSpeed = 0.02;
         this.device = null;
         this.normalObjects = {} as normalObjects;
         this.rayTracerObjects = {} as rayTracerObjects;
@@ -1415,6 +1415,7 @@ class RayTracer
         const numTriangles = indexData.length / 3;
         this.fastBVH.initializeMortonPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer, numTriangles);
         this.fastBVH.initializeRadixSortPipelines(this.device);
+        this.fastBVH.initializePatriciaTreePipeline(this.device);
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -1890,6 +1891,7 @@ class RayTracer
                 FPS: ${(1000/dt).toFixed(1)}
                 JS Time: ${jsTime.toFixed(1)} ms
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
+                Num Triangles: ${this.fastBVH.numTriangles}
                 ${this.fastBVH.debug ? this.minMaxBoundsText : ''}
                 `
                 this.infoElement.textContent = content;

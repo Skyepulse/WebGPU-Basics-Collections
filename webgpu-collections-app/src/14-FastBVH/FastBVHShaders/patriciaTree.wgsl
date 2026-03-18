@@ -93,7 +93,7 @@ fn cs(
     let deltaMin = delta(i, i - d);
     
     var lmax = 2u;
-    while (delta(i, i + lmax * d) > deltaMin)
+    while (delta(i, i + i32(lmax) * d) > deltaMin)
     {
         lmax = lmax * 2u;
     }
@@ -102,13 +102,13 @@ fn cs(
     var t = lmax / 2u;
     while (t >= 1u)
     {
-        if (delta(i, i + (l + t) * d) > deltaMin)
+        if (delta(i, i + i32(l + t) * d) > deltaMin)
         {
             l = l + t;
         }
-        t = t >>= 1u;
+        t >>= 1u;
     }
-    let j = i + l * d;
+    let j = i + i32(l) * d;
 
     let deltaNode = delta(i, j);
     var s = 0;
@@ -134,19 +134,19 @@ fn cs(
     }   
     else
     {
-        internalNodes[u32(i)].left = gamma;
+        internalNodes[u32(i)].left = u32(gamma);
         internalNodes[u32(gamma)].parent = u32(i);
     }
 
-    if (max(i, j) == gamma + 1u)
+    if (max(i, j) == gamma + 1)
     {
-        internalNodes[u32(i)].right = u32(gamma + 1u) | LEAF_BIT;
-        leafNodes[u32(gamma + 1u)] = u32(i);
+        internalNodes[u32(i)].right = u32(gamma + 1) | LEAF_BIT;
+        leafNodes[u32(gamma + 1)] = u32(i);
     }
     else
     {
-        internalNodes[u32(i)].right = u32(gamma + 1u);
-        internalNodes[u32(gamma + 1u)].parent = u32(i);
+        internalNodes[u32(i)].right = u32(gamma + 1);
+        internalNodes[u32(gamma + 1)].parent = u32(i);
     }
 }
 

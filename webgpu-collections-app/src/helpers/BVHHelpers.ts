@@ -411,48 +411,68 @@ export class BVH
     {
         let closestDistance = Number.MAX_VALUE;
 
-        // test root:
-        const rootNode = this.Nodes[0];
-        const distRoot = rayIntersectsAABB(ray, rootNode.minBounds, rootNode.maxBounds);
-        if (distRoot < 0) return -1;
+        const root = this.Nodes[0];
+        const rootDist = rayIntersectsAABB(ray, root.minBounds, root.maxBounds);
+        if (rootDist < 0) return -1;
 
-        const stack: {index: number, depth: number, dist: number}[] = [{index: 0, depth: 0, dist: distRoot}];
+        const stack: { index: number, depth: number, dist: number }[] = [
+            { index: 0, depth: 0, dist: rootDist }
+        ];
+
         while (stack.length > 0)
         {
             const { index, depth, dist } = stack.pop()!;
             const node = this.Nodes[index];
 
-            if (node.triangleCount === -1)
+            if (dist >= closestDistance) continue;
+
+            const isLeaf = node.triangleCount >= 0;
+            const isTargetDepth = depth === maxDepth;
+
+            // I added here the same condition as how I render it
+            // So there's no msmatch.
+            if (isLeaf || isTargetDepth)
             {
-                if (depth < maxDepth)
+                if (dist < closestDistance)
                 {
-                    const leftIndex = node.startIndex;
-                    const rightIndex = node.startIndex + 1;
+                    closestDistance = dist;
+                }
+                continue;
+            }
 
-                    const distLeft = rayIntersectsAABB(ray, this.Nodes[leftIndex].minBounds, this.Nodes[leftIndex].maxBounds);
-                    const distRight = rayIntersectsAABB(ray, this.Nodes[rightIndex].minBounds, this.Nodes[rightIndex].maxBounds);
+            const leftIndex = node.startIndex;
+            const rightIndex = node.startIndex + 1;
 
-                    if (distLeft < distRight)
-                    {
-                        if (distRight >= 0) stack.push({index: rightIndex, depth: depth + 1, dist: distRight});
-                        if (distLeft >= 0)  stack.push({index: leftIndex, depth: depth + 1, dist: distLeft});
-                    }
-                    else
-                    {
-                        if (distLeft >= 0)  stack.push({index: leftIndex, depth: depth + 1, dist: distLeft});
-                        if (distRight >= 0) stack.push({index: rightIndex, depth: depth + 1, dist: distRight});
-                    }
+            const leftNode = this.Nodes[leftIndex];
+            const rightNode = this.Nodes[rightIndex];
+
+            const distLeft = rayIntersectsAABB(ray, leftNode.minBounds, leftNode.maxBounds);
+            const distRight = rayIntersectsAABB(ray, rightNode.minBounds, rightNode.maxBounds);
+
+            if (distLeft >= 0 && distRight >= 0)
+            {
+                if (distLeft < distRight)
+                {
+                    stack.push({ index: rightIndex, depth: depth + 1, dist: distRight });
+                    stack.push({ index: leftIndex, depth: depth + 1, dist: distLeft });
                 }
                 else
                 {
-                    if (dist < closestDistance)
-                    {
-                        closestDistance = dist;
-                    }
+                    stack.push({ index: leftIndex, depth: depth + 1, dist: distLeft });
+                    stack.push({ index: rightIndex, depth: depth + 1, dist: distRight });
                 }
             }
+            else if (distLeft >= 0)
+            {
+                stack.push({ index: leftIndex, depth: depth + 1, dist: distLeft });
+            }
+            else if (distRight >= 0)
+            {
+                stack.push({ index: rightIndex, depth: depth + 1, dist: distRight });
+            }
         }
-        return closestDistance;
+
+        return closestDistance === Number.MAX_VALUE ? -1 : closestDistance;
     }
 
     //================================//

@@ -1770,3 +1770,130 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
         }
     };
 }
+
+export async function fastBVHExampleScene(meshMaterials: Material[], seed: number): Promise<SceneInformation>
+{
+    const numSpheres = 100;
+    const Meshes: Mesh[] = [];
+
+    const planeMin = -100;
+    const planeMax = 100;
+
+    // Seeded PRNG (mulberry32)
+    let s = seed | 0;
+    const random = (): number => 
+    {
+        s = (s + 0x6D2B79F5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+
+    const randomRange = (min: number, max: number): number => 
+    {
+        return random() * (max - min) + min;
+    };
+
+    // ============== GROUND PLANE ============== //
+    const planeMesh = new Mesh("ground", createDefaultMaterial({ albedo: [0.9, 0.9, 0.9], name: "ground", roughness: 1.0, metalness: 0.0 }));
+    
+    const pY = 0;
+    const i0 = planeMesh.addVertex({ pos: glm.vec3.fromValues(planeMin, pY, planeMin), normal: glm.vec3.fromValues(0, 1, 0), uv: glm.vec2.fromValues(0, 0) });
+    const i1 = planeMesh.addVertex({ pos: glm.vec3.fromValues(planeMax, pY, planeMin), normal: glm.vec3.fromValues(0, 1, 0), uv: glm.vec2.fromValues(1, 0) });
+    const i2 = planeMesh.addVertex({ pos: glm.vec3.fromValues(planeMax, pY, planeMax), normal: glm.vec3.fromValues(0, 1, 0), uv: glm.vec2.fromValues(1, 1) });
+    const i3 = planeMesh.addVertex({ pos: glm.vec3.fromValues(planeMin, pY, planeMax), normal: glm.vec3.fromValues(0, 1, 0), uv: glm.vec2.fromValues(0, 1) });
+    planeMesh.addTriangle([i0, i2, i1]);
+    planeMesh.addTriangle([i0, i3, i2]);
+    Meshes.push(planeMesh);
+
+    // ============== SPHERES ============== //
+    const sphereResolution = 32;
+    function addSphere(
+        mesh: Mesh,
+        center: [number, number, number],
+        radius: number,
+        latitudeBands: number = 12,
+        longitudeBands: number = 12
+    ): void
+    {
+        const startIndex = mesh.getNumVertices();
+
+        for (let lat = 0; lat <= latitudeBands; lat++)
+        {
+            const theta = lat * Math.PI / latitudeBands;
+            const sinTheta = Math.sin(theta);
+            const cosTheta = Math.cos(theta);
+
+            for (let lon = 0; lon <= longitudeBands; lon++)
+            {
+                const phi = lon * 2 * Math.PI / longitudeBands;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+
+                const x = cosPhi * sinTheta;
+                const y = cosTheta;
+                const z = sinPhi * sinTheta;
+
+                mesh.addVertex({
+                    pos: glm.vec3.fromValues(
+                        center[0] + radius * x,
+                        center[1] + radius * y,
+                        center[2] + radius * z
+                    ),
+                    normal: glm.vec3.fromValues(x, y, z),
+                    uv: glm.vec2.fromValues(
+                        1 - (lon / longitudeBands),
+                        1 - (lat / latitudeBands)
+                    )
+                });
+            }
+        }
+
+        for (let lat = 0; lat < latitudeBands; lat++)
+        {
+            for (let lon = 0; lon < longitudeBands; lon++)
+            {
+                const first = startIndex + lat * (longitudeBands + 1) + lon;
+                const second = first + longitudeBands + 1;
+
+                mesh.addTriangle([first, first + 1, second]);
+                mesh.addTriangle([second, first + 1, second + 1]);
+            }
+        }
+    }
+
+    for (let i = 0; i < numSpheres; i++)
+    {
+        const sphereMaterial = meshMaterials.find(mat => mat.name === `sphere${i}`) || createDefaultMaterial({
+            albedo: [random(), random(), random()],
+            name: `sphere${i}`,
+            roughness: randomRange(0.01, 1.0),
+            metalness: random() > 0.5 ? randomRange(0.8, 1.0) : randomRange(0.0, 0.2)
+        });
+
+        const radius = randomRange(2, 8);
+        const center: [number, number, number] = [
+            randomRange(planeMin + radius, planeMax - radius),
+            radius,  // sits on the ground plane
+            randomRange(planeMin + radius, planeMax - radius)
+        ];
+
+        const sphereMesh = new Mesh(`sphere${i}`, sphereMaterial);
+        addSphere(sphereMesh, center, radius, sphereResolution, sphereResolution);
+        Meshes.push(sphereMesh);
+    }
+
+    for (const mesh of Meshes)
+        mesh.ComputeBVH();
+
+    let meshesWithoutGround = Meshes.slice(1); // Exclude the ground plane for BVH testing
+
+    return {
+        meshes: Meshes,
+        additionalInfo: {
+            meshIndices: meshesWithoutGround.map((_, i) => (i+1)),
+            meshTransforms: meshesWithoutGround.map(m => m.GetTransform()),
+            meshMaterials: meshesWithoutGround.map(m => m.GetMaterial())
+        }
+    };
+}

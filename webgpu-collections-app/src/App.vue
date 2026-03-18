@@ -75,14 +75,15 @@
     import { startup_11 } from './11-BVH/main';
     import { startup_12 } from './12-MonteCarlo/main';
     import { startup_13 } from './13-RadixSort/main';
+    import { startup_14 } from './14-FastBVH/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
     const currentRenderer = ref<any>(null);
     const isSwitching = ref(false);
 
-    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10, startup_11, startup_12, startup_13];
+    const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10, startup_11, startup_12, startup_13, startup_14];
     const numberOfExamples = startupFunctions.length;
-    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Video', 'Game', 'Ray Trace', 'Transparency', 'PBR', 'BVH', 'Monte Carlo', 'Radix Sort'];
+    const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Video', 'Game', 'Ray Trace', 'Transparency', 'PBR', 'BVH', 'Monte Carlo', 'Radix Sort', 'Fast BVH'];
     
     // Slider state
     const hoveredIndex = ref<number|null>(null);
@@ -159,6 +160,6 @@
     //================================//
     onMounted(() => {
         addUtilElementDefaults();
-        selectExample(11);
+        selectExample(14);
     });
 </script>

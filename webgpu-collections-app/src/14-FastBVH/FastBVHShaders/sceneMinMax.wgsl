@@ -3,8 +3,8 @@
 
 //================================//
 override THREADS_PER_WORKGROUP: u32;
-override X_SIZE: u32;
-override Y_SIZE: u32;
+override SIZE_X: u32;
+override SIZE_Y: u32;
 override TOTAL_VERTICES: u32;
 
 //================================//
@@ -16,7 +16,7 @@ var<workgroup> shared_max : array<vec3<f32>, THREADS_PER_WORKGROUP>;
 
 //================================//
 @compute
-@workgroup_size(X_SIZE, Y_SIZE, 1)
+@workgroup_size(SIZE_X, SIZE_Y, 1)
 fn cs(
     @builtin(workgroup_id) w_id: vec3<u32>,
     @builtin(num_workgroups) num_work: vec3<u32>,

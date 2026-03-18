@@ -50,6 +50,7 @@ class FastParallelBVH
     private minMaxReduceShaderModule!: GPUShaderModule;
     private minMaxSceneShaderModule!: GPUShaderModule;
     private minMaxLevels: minMaxLevel[] = [];
+    minMaxReadbackBuffer: GPUBuffer | null = null;
 
     //================================//
     constructor()
@@ -139,6 +140,20 @@ class FastParallelBVH
             currentWorkGroupCount = workGroupCount;
             currentInputBuffer = outputBuffer;
         }
+
+        this.minMaxReadbackBuffer = device.createBuffer({
+            label: 'MinMax Readback Buffer',
+            size: 6 * 4,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+        });
+    }
+
+    //================================//
+    copyResultForReadback(encoder: GPUCommandEncoder)
+    {
+        if (!this.minMaxReadbackBuffer || this.minMaxLevels.length === 0) return;
+        const lastOutput = this.minMaxLevels[this.minMaxLevels.length - 1].output;
+        encoder.copyBufferToBuffer(lastOutput, 0, this.minMaxReadbackBuffer, 0, 6 * 4);
     }
 
     //================================//
@@ -226,6 +241,10 @@ interface rayTracerObjects extends PipelineResources
 
     sampler: GPUSampler;
     textureArray: GPUTexture;
+
+    // Utils for the FastBVH implementation
+    worldPositionStorageBuffer: GPUBuffer;
+    perMeshWorldPositionOffsets: number[];
 };
 
 //================================//
@@ -262,6 +281,7 @@ class RayTracer
     private useRaytracing: boolean = true;
     private rayTracerMode: RayTracerMode = RayTracerMode.raytrace;
     private numBounces: number = 3;
+    private numSpheres: number = 100;
     private meshesInfo: any;
     private activeContextMenu: HTMLDivElement | null = null;
     private seed = 0;
@@ -269,6 +289,7 @@ class RayTracer
     //================================//
     private showBVH: boolean = false;
     private bvhDepth: number = Infinity;
+    private minMaxBoundsText: string = '';
 
     //================================//
     private fastBVH: FastParallelBVH = new FastParallelBVH();
@@ -356,6 +377,8 @@ class RayTracer
         addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
         utilElement.appendChild(document.createElement('br'));
         addNumberInput('Random Seed', this.seed, 0, 10<<20, 1, utilElement, (value) => { this.seed = value; this.initializeBuffers(); });
+        utilElement.appendChild(document.createElement('br'));
+        addSlider('Number of Spheres', this.numSpheres, 1, 200, 1, utilElement, (value) => { this.numSpheres = value; this.initializeBuffers(); });
     }
 
     //================================//
@@ -667,9 +690,11 @@ class RayTracer
         const placeholderTexture = createPlaceholderTexture(this.device, 1024, 32);
 
         const meshMaterials = this.meshesInfo?.meshMaterials || [];
-        const info: SceneInformation = await fastBVHExampleScene(meshMaterials, 12);
+        const info: SceneInformation = await fastBVHExampleScene(meshMaterials, this.seed, this.numSpheres);
         this.normalObjects.sceneInformation = info;
         this.meshesInfo = info.additionalInfo;
+        const worldPositionData: Float32Array = this.meshesInfo.worldPositionData;
+        this.rayTracerObjects.perMeshWorldPositionOffsets = this.meshesInfo.perMeshWorldPositionOffsets;
 
         const numMaterials = info.meshes.length;
         this.normalObjects.materialUniforms = [];
@@ -880,7 +905,14 @@ class RayTracer
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
         this.device.queue.writeBuffer(this.rayTracerObjects.positionStorageBuffer, 0, positionData as BufferSource);
-        this.fastBVH.initializeMinMaxPipeline(this.device, this.rayTracerObjects.positionStorageBuffer, positionData.length / 3);
+
+        this.rayTracerObjects.worldPositionStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer World Position Storage Buffer',
+            size: worldPositionData.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.rayTracerObjects.worldPositionStorageBuffer, 0, worldPositionData as BufferSource);
+        this.fastBVH.initializeMinMaxPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, worldPositionData.length / 3);
 
         this.rayTracerObjects.normalStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Normal Storage Buffer',
@@ -1213,6 +1245,77 @@ class RayTracer
     //================================//
     animate()
     {
+        const meshes = this.normalObjects.sceneInformation.meshes;
+        const totalMeshes = meshes.length;
+        const time = performance.now() * 0.001;
+
+        let s = (this.seed + 777) | 0;
+        const random = (): number => 
+        {
+            s = (s + 0x6D2B79F5) | 0;
+            let t = Math.imul(s ^ (s >>> 15), 1 | s);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+        const randomRange = (min: number, max: number) => random() * (max - min) + min;
+        const maxAnimated = Math.min(10, totalMeshes - 1);
+
+        for (let i = 0; i < maxAnimated; i++)
+        {
+            const meshIndex = i + 1;
+            const mesh = meshes[meshIndex];
+
+            const orbitRadius = randomRange(20, 80);
+            const speed = randomRange(0.3, 1.5);
+            const phaseOffset = randomRange(0, Math.PI * 2);
+            const pattern = random();
+
+            const baseY = mesh.GetTransform().scale[0];
+            const baseX = randomRange(-60, 60);
+            const baseZ = randomRange(-60, 60);
+
+            let x: number, y: number, z: number;
+            const t = time * speed + phaseOffset;
+
+            if (pattern < 0.25)
+            {
+                x = baseX + orbitRadius * Math.sin(t);
+                z = baseZ + orbitRadius * Math.sin(t) * Math.cos(t);
+                y = baseY;
+            }
+            else if (pattern < 0.5)
+            {
+                const eccentricity = randomRange(0.3, 0.8);
+                x = baseX + orbitRadius * Math.cos(t);
+                z = baseZ + orbitRadius * eccentricity * Math.sin(t);
+                y = baseY + Math.abs(Math.sin(t * 2.0)) * 15.0;
+            }
+            else if (pattern < 0.75)
+            {
+                const axis = randomRange(0, Math.PI * 2);
+                const dist = Math.sin(t) * orbitRadius;
+                x = baseX + Math.cos(axis) * dist;
+                z = baseZ + Math.sin(axis) * dist;
+                y = baseY + Math.abs(Math.sin(t * 1.5)) * 8.0;
+            }
+            else
+            {
+                const spiralRadius = orbitRadius * (0.5 + 0.5 * Math.sin(t * 0.3));
+                x = baseX + spiralRadius * Math.cos(t);
+                z = baseZ + spiralRadius * Math.sin(t);
+                y = baseY;
+            }
+
+            mesh.SetTranslation(glm.vec3.fromValues(x, y, z));
+
+            this.device?.queue.writeBuffer(this.normalObjects.meshesModelMatrixBuffers[meshIndex], 0, mesh.GetFlatWorldMatrix() as BufferSource);
+            this.device?.queue.writeBuffer(this.normalObjects.meshesNormalMatrixBuffers[meshIndex], 0, mesh.GetFlatNormalMatrix() as BufferSource);
+            this.device?.queue.writeBuffer(this.rayTracerObjects.meshInstancesStorageBuffer, meshIndex * meshInstanceSize, mesh.GetFlatInverseWorldMatrix() as BufferSource);
+
+            const worldPositions = mesh.getWorldVertexData();
+            const meshOffset = this.rayTracerObjects.perMeshWorldPositionOffsets[meshIndex];
+            this.device?.queue.writeBuffer(this.rayTracerObjects.worldPositionStorageBuffer, meshOffset, worldPositions as BufferSource);
+        }
     }
 
     //================================//
@@ -1268,6 +1371,8 @@ class RayTracer
             const computePass = encoder.beginComputePass({ label: 'MinMax Compute Pass' });
             this.fastBVH.dispatchMinMaxPasses(computePass);
             computePass.end();
+            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped')
+                this.fastBVH.copyResultForReadback(encoder);
 
             const pass = encoder.beginRenderPass(renderPassDescriptor);
 
@@ -1323,6 +1428,16 @@ class RayTracer
             const commandBuffer = encoder.finish();
             this.device.queue.submit([commandBuffer]);
 
+            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped')
+            {
+                this.fastBVH.minMaxReadbackBuffer.mapAsync(GPUMapMode.READ).then(() =>
+                {
+                    const d = new Float32Array(this.fastBVH.minMaxReadbackBuffer!.getMappedRange());
+                    this.minMaxBoundsText = `Min: (${d[0].toFixed(1)}, ${d[1].toFixed(1)}, ${d[2].toFixed(1)}) Max: (${d[3].toFixed(1)}, ${d[4].toFixed(1)}, ${d[5].toFixed(1)})`;
+                    this.fastBVH.minMaxReadbackBuffer!.unmap();
+                });
+            }
+
             if (this.timestampQuerySet != null && this.timestampQuerySet.resultBuffer.mapState === 'unmapped')
             {
                 this.timestampQuerySet.resultBuffer.mapAsync(GPUMapMode.READ).then(() =>
@@ -1341,6 +1456,7 @@ class RayTracer
                 FPS: ${(1000/dt).toFixed(1)}
                 JS Time: ${jsTime.toFixed(1)} ms
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
+                ${this.minMaxBoundsText}
                 `
                 this.infoElement.textContent = content;
             }

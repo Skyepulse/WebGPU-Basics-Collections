@@ -112,6 +112,13 @@ export class Mesh
     }
 
     //================================//
+    public SetTranslation(translation: glm.vec3): void
+    {
+        this.transform.translation = translation;
+        this.computeMatrices();
+    }
+
+    //================================//
     private computeMatrices(): void
     {
         this.WorldMatrix = glm.mat4.create();
@@ -215,6 +222,22 @@ export class Mesh
         {
             const pos = this.vertices[i].pos;
             float32View.set(pos, i * 3);
+        }
+
+        return float32View;
+    }
+
+    //================================//
+    // Same but in world space (ie. transformed by the WorldMatrix)
+    public getWorldVertexData(): Float32Array
+    {
+        const float32View = new Float32Array(this.vertices.length * 3);
+        const temp = glm.vec3.create();
+
+        for (let i = 0; i < this.vertices.length; ++i)
+        {
+            glm.vec3.transformMat4(temp, this.vertices[i].pos, this.WorldMatrix);
+            float32View.set(temp, i * 3);
         }
 
         return float32View;
@@ -1771,9 +1794,8 @@ export async function createCornellBox4(meshMaterials: Material[]): Promise<Scen
     };
 }
 
-export async function fastBVHExampleScene(meshMaterials: Material[], seed: number): Promise<SceneInformation>
+export async function fastBVHExampleScene(meshMaterials: Material[], seed: number, numSpheres: number): Promise<SceneInformation>
 {
-    const numSpheres = 100;
     const Meshes: Mesh[] = [];
 
     const planeMin = -100;
@@ -1886,14 +1908,26 @@ export async function fastBVHExampleScene(meshMaterials: Material[], seed: numbe
     for (const mesh of Meshes)
         mesh.ComputeBVH();
 
-    let meshesWithoutGround = Meshes.slice(1); // Exclude the ground plane for BVH testing
+    const worldPositionData: number[] = [];
+    const perMeshWorldPositionOffsets: number[] = [];
+    let byteOffset = 0;
+    for (let i = 0; i < Meshes.length; i++)
+    {
+        const worldVertices = Meshes[i].getWorldVertexData();
+        worldPositionData.push(...worldVertices);
+        perMeshWorldPositionOffsets.push(byteOffset);
+        byteOffset += Meshes[i].getNumVertices() * 3 * 4;
+    }
+    const worldPositionFloat32Array = new Float32Array(worldPositionData);  
 
     return {
         meshes: Meshes,
         additionalInfo: {
-            meshIndices: meshesWithoutGround.map((_, i) => (i+1)),
-            meshTransforms: meshesWithoutGround.map(m => m.GetTransform()),
-            meshMaterials: meshesWithoutGround.map(m => m.GetMaterial())
+            meshIndices: Meshes.map((_, i) => (i)),
+            meshTransforms: Meshes.map(m => m.GetTransform()),
+            meshMaterials: Meshes.map(m => m.GetMaterial()),
+            worldPositionData: worldPositionFloat32Array,
+            perMeshWorldPositionOffsets: perMeshWorldPositionOffsets
         }
     };
 }

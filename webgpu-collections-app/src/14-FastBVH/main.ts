@@ -67,6 +67,8 @@ class FastParallelBVH
     //============== Min Max Methods ==================//
     initializeMinMaxPipeline(device: GPUDevice, topLevelVertexBuffer: GPUBuffer, totalVertexCount: number)
     {
+        this.minMaxLevels = [];
+        
         this.minMaxReduceShaderModule = device.createShaderModule({label: 'Scene Min Max Reduce Shader Module', code: minMaxReduceWGSL});
         this.minMaxSceneShaderModule = device.createShaderModule({label: 'Scene Min Max Scene Shader Module', code: sceneMinMaxWGSL});
 
@@ -879,7 +881,7 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.rayTracerObjects.positionStorageBuffer, 0, positionData as BufferSource);
         this.fastBVH.initializeMinMaxPipeline(this.device, this.rayTracerObjects.positionStorageBuffer, positionData.length / 3);
-        
+
         this.rayTracerObjects.normalStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Normal Storage Buffer',
             size: normalData.byteLength,
@@ -1262,6 +1264,11 @@ class RayTracer
             };
 
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
+
+            const computePass = encoder.beginComputePass({ label: 'MinMax Compute Pass' });
+            this.fastBVH.dispatchMinMaxPasses(computePass);
+            computePass.end();
+
             const pass = encoder.beginRenderPass(renderPassDescriptor);
 
             if (this.useRaytracing)

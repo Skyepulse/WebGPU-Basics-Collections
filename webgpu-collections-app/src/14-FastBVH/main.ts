@@ -19,6 +19,7 @@ import radixBlockSumsWGSL from './FastBVHShaders/radixBlockSums.wgsl?raw';
 import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
 import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
 import patriciaTreeWGSL from './FastBVHShaders/patriciaTree.wgsl?raw';
+import AABBWGSL from './FastBVHShaders/AABB.wgsl?raw';
 
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
@@ -55,6 +56,7 @@ interface PrefixSumLevel
 }
 
 const BVHNodeSize = 48;
+const LeafAABBSize = 32;
 //================================//
 class FastParallelBVH
 {
@@ -126,6 +128,21 @@ class FastParallelBVH
     private mortonCodesBuffer!: GPUBuffer;
     private internalNodesBuffer!: GPUBuffer;
     private leafNodesBuffer!: GPUBuffer;
+
+    //=============== AABB objects =================//
+    private aabbShaderModule!: GPUShaderModule;
+    private aabbPipelineLayout!: GPUPipelineLayout;
+    private aabbBindGroupLayout!: GPUBindGroupLayout;
+    private aabbPipeline!: GPUComputePipeline;
+    private aabbBindGroup!: GPUBindGroup;
+
+    private aabbInternalNodesBuffer!: GPUBuffer;
+    private aabbLeafNodesBuffer!: GPUBuffer;
+    private aabbAtomicCountersBuffer!: GPUBuffer;
+    private aabbVertexBuffer!: GPUBuffer;
+    private aabbIndexBuffer!: GPUBuffer;
+    private aabbSortedIndexBuffer!: GPUBuffer;
+    private leafAABBsBuffer!: GPUBuffer;
 
     //================================//
     constructor()
@@ -589,6 +606,78 @@ class FastParallelBVH
 
         commandEncoder.setPipeline(this.patriciaTreePipeline);
         commandEncoder.setBindGroup(0, this.patriciaTreeBindGroup);
+        commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+    }
+
+    //============== AABB Construction Methods ==================//
+    initializeAABBPipeline(device: GPUDevice, vertexBuffer: GPUBuffer, indexBuffer: GPUBuffer)
+    {
+        this.aabbShaderModule = device.createShaderModule({ label: 'AABB Shader Module', code: AABBWGSL });
+        this.aabbBindGroupLayout = device.createBindGroupLayout({
+            label: 'AABB Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // internal nodes buffer
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf nodes buffer (containing parent pointers)
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // atomic counters
+                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // vertex buffer
+                        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // index buffer
+                        { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // sorted index buffer (output of radix sort pass)
+                        { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },] // leaf AABBs buffer
+        });
+        this.aabbPipelineLayout = device.createPipelineLayout({ label: 'AABB Pipeline Layout', bindGroupLayouts: [this.aabbBindGroupLayout] });
+        this.aabbPipeline = device.createComputePipeline({
+            label: 'AABB Pipeline',
+            layout: this.aabbPipelineLayout,
+            compute: {
+                module: this.aabbShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, INTERNAL_NODE_COUNT: this.numTriangles - 1, LEAF_NODE_COUNT: this.numTriangles }
+            },
+        });
+        
+        this.aabbInternalNodesBuffer = this.internalNodesBuffer;
+        this.aabbLeafNodesBuffer = this.leafNodesBuffer;
+        this.aabbAtomicCountersBuffer = device.createBuffer({
+            label: 'AABB Atomic Counters Buffer',
+            size: 4 * (this.numTriangles - 1), // counters for internal nodes
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST // We need Copy_dst so I can clear it to 0s ech pass
+        });
+        this.aabbVertexBuffer = vertexBuffer;
+        this.aabbIndexBuffer = indexBuffer;
+        this.aabbSortedIndexBuffer = this.valuesBufferB;
+        this.leafAABBsBuffer = device.createBuffer({
+            label: 'Leaf AABBs Buffer',
+            size: this.numTriangles * LeafAABBSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.aabbBindGroup = device.createBindGroup({
+            label: 'AABB Bind Group',
+            layout: this.aabbBindGroupLayout,
+            entries: [  { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                        { binding: 1, resource: { buffer: this.aabbLeafNodesBuffer } },
+                        { binding: 2, resource: { buffer: this.aabbAtomicCountersBuffer } },
+                        { binding: 3, resource: { buffer: this.aabbVertexBuffer } },
+                        { binding: 4, resource: { buffer: this.aabbIndexBuffer } },
+                        { binding: 5, resource: { buffer: this.aabbSortedIndexBuffer } },
+                        { binding: 6, resource: { buffer: this.leafAABBsBuffer } } ]
+        });
+    }
+
+    //================================//
+    clearAtomicCounters(encoder: GPUCommandEncoder)
+    {
+        if (!this.aabbAtomicCountersBuffer) return;
+        encoder.clearBuffer(this.aabbAtomicCountersBuffer);
+    }
+
+    //================================//
+    dispatchAABBPass(commandEncoder: GPUComputePassEncoder)
+    {
+        if (!this.aabbPipeline || !this.aabbBindGroup) return;
+
+        const dispatchX = Math.ceil((this.numTriangles) / this.THREADS_PER_WORKGROUP);
+        commandEncoder.setPipeline(this.aabbPipeline);
+        commandEncoder.setBindGroup(0, this.aabbBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
     }
 }
@@ -1416,6 +1505,7 @@ class RayTracer
         this.fastBVH.initializeMortonPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer, numTriangles);
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
+        this.fastBVH.initializeAABBPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer);
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -1802,6 +1892,7 @@ class RayTracer
 
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
 
+            this.fastBVH.clearAtomicCounters(encoder);
             const computePass = encoder.beginComputePass({ label: 'MinMax Compute Pass' });
             this.fastBVH.dispatch(computePass);
             computePass.end();

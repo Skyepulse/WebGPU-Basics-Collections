@@ -80,8 +80,7 @@ struct BVHNode
 //================================//
 @compute
 @workgroup_size(THREADS_PER_WORKGROUP, 1, 1)
-fn cs(
-    @builtin(global_invocation_id) gid: vec3u)
+fn cs(@builtin(global_invocation_id) gid: vec3u)
 {
     if (gid.x >= INTERNAL_NODE_COUNT) 
     {
@@ -148,6 +147,11 @@ fn cs(
         internalNodes[u32(i)].right = u32(gamma + 1);
         internalNodes[u32(gamma + 1)].parent = u32(i);
     }
+
+    if (i == 0) 
+    {
+        internalNodes[0].parent = 0xFFFFFFFFu;
+    } // Make sure we hit a termination condition when climbing up the tree later
 }
 
 //================================//

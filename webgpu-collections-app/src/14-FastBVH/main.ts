@@ -14,6 +14,10 @@ import bvhFragWGSL from './MainArchitectureShaders/bvh_frag.wgsl?raw';
 
 import sceneMinMaxWGSL from './FastBVHShaders/sceneMinMax.wgsl?raw';
 import minMaxReduceWGSL from './FastBVHShaders/minMaxReduce.wgsl?raw';
+import mortonCodeWGSL from './FastBVHShaders/mortonCode.wgsl?raw';
+import radixBlockSumsWGSL from './FastBVHShaders/radixBlockSums.wgsl?raw';
+import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
+import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
 
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
@@ -36,6 +40,18 @@ interface minMaxLevel
     dispatchX: number;
     dispatchY: number;
 }
+interface PrefixSumLevel
+{
+    elementCount: number;
+    workgroupCount: number;
+    reducePipeline: GPUComputePipeline;
+    addPipeline: GPUComputePipeline;
+    bindGroup: GPUBindGroup;
+    dataBuffer: GPUBuffer;
+    blockSumBuffer: GPUBuffer;
+    dispatchX: number;
+    dispatchY: number;
+}
 
 //================================//
 class FastParallelBVH
@@ -43,6 +59,10 @@ class FastParallelBVH
     private THREADS_PER_WORKGROUP = 256;
     private SIZE_X = 16;
     private SIZE_Y = 16;
+    private numTriangles: number = 0;
+    private ITEMS_PER_WORKGROUP = 2 * this.THREADS_PER_WORKGROUP;
+    private BIT_COUNT = 30;
+    private NUM_PASSES = this.BIT_COUNT / 2;
 
     //=============== Min Max objects =================// 
     private minMaxPipelineLayout!: GPUPipelineLayout;
@@ -52,9 +72,56 @@ class FastParallelBVH
     private minMaxLevels: minMaxLevel[] = [];
     minMaxReadbackBuffer: GPUBuffer | null = null;
 
+    //=============== Morton code computation objects =================//
+    private mortonPipelineLayout!: GPUPipelineLayout;
+    private mortonPipeline!: GPUComputePipeline;
+    private mortonBindGroupLayout!: GPUBindGroupLayout;
+    private mortonShaderModule!: GPUShaderModule;
+    private mortonBindGroup!: GPUBindGroup;
+    private mortonOutputBitsBuffer!: GPUBuffer;
+    private mortonOutputTriangleIndexBuffer!: GPUBuffer;
+
+    //============== Radix Sort objects ==================//
+    private WORKGROUP_COUNT!: number;
+    private radixSortBindGroupLayout!: GPUBindGroupLayout;
+    private reorderBindGroupLayout!: GPUBindGroupLayout;
+    private prefixSumBindGroupLayout!: GPUBindGroupLayout;
+    private radixSortPipelineLayout!: GPUPipelineLayout;
+    private reorderPipelineLayout!: GPUPipelineLayout;
+    private prefixSumPipelineLayout!: GPUPipelineLayout;
+    private radixSortShaderModule!: GPUShaderModule;
+    private reorderShaderModule!: GPUShaderModule;
+    private prefixSumShaderModule!: GPUShaderModule;
+
+    private prefixSumLevels: PrefixSumLevel[] = [];
+    private radixSortPipeline!: GPUComputePipeline;
+    private reorderPipeline!: GPUComputePipeline;
+    
+    private radixSortBindGroups!:   [GPUBindGroup, GPUBindGroup];
+    private reorderBindGroups!:     [GPUBindGroup, GPUBindGroup];
+
+    private keysBufferA!: GPUBuffer;
+    private keysBufferB!: GPUBuffer;
+    private valuesBufferA!: GPUBuffer;
+    private valuesBufferB!: GPUBuffer;
+    private localPrefixSumBuffer!: GPUBuffer;
+    private blockSumBuffer!: GPUBuffer;
+
+    private uniformBuffers!: GPUBuffer[];
+    private uniformBindGroups!: GPUBindGroup[];
+    private uniformBindGroupLayout!: GPUBindGroupLayout;
+
     //================================//
     constructor()
     {
+    }
+
+    //================================//
+    dispatch(commandEncoder: GPUComputePassEncoder)
+    {
+        this.dispatchMinMaxPass(commandEncoder);
+        this.dispatchMortonPass(commandEncoder);
+        this.dispatchRadixSort(commandEncoder);
     }
 
     //================================//
@@ -157,13 +224,298 @@ class FastParallelBVH
     }
 
     //================================//
-    dispatchMinMaxPasses(commandEncoder: GPUComputePassEncoder)
+    dispatchMinMaxPass(commandEncoder: GPUComputePassEncoder)
     {
         for (const level of this.minMaxLevels)
         {
             commandEncoder.setPipeline(level.minMaxPipeline);
             commandEncoder.setBindGroup(0, level.minMaxBindGroup);
             commandEncoder.dispatchWorkgroups(level.dispatchX, level.dispatchY);
+        }
+    }
+
+    //============== Morton Code Methods ==================//
+    initializeMortonPipeline(device: GPUDevice, vertexBuffer: GPUBuffer, indexBuffer: GPUBuffer, numTriangles: number)
+    {
+        this.numTriangles = numTriangles;
+        this.mortonShaderModule = device.createShaderModule({ label: 'Morton Code Shader Module', code: mortonCodeWGSL });
+        this.mortonBindGroupLayout = device.createBindGroupLayout({
+            label: 'Morton Code Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },  // vertex buffer
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },  // index buffer
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },  // scene min max buffer
+                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },            // output morton bits buffer
+                        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },]           // output triangle index buffer
+        });
+        this.mortonPipelineLayout = device.createPipelineLayout({ label: 'Morton Code Pipeline Layout', bindGroupLayouts: [this.mortonBindGroupLayout] });
+        this.mortonPipeline = device.createComputePipeline({
+            label: 'Morton Code Pipeline',
+            layout: this.mortonPipelineLayout,
+            compute: {
+                module: this.mortonShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, SIZE_X: this.SIZE_X, SIZE_Y: this.SIZE_Y, TRIANGLE_COUNT: numTriangles },
+            }
+        });
+
+        this.mortonOutputBitsBuffer = device.createBuffer({
+            label: 'Morton Code Output Bits Buffer',
+            size: numTriangles * 4, // u32 == 4 bytes
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+        this.mortonOutputTriangleIndexBuffer = device.createBuffer({
+            label: 'Morton Code Output Triangle Index Buffer',
+            size: numTriangles * 4, 
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.mortonBindGroup = device.createBindGroup({
+            label: 'Morton Code Bind Group',
+            layout: this.mortonBindGroupLayout,
+            entries: [ { binding: 0, resource: { buffer: vertexBuffer } },
+                        { binding: 1, resource: { buffer: indexBuffer } },
+                        { binding: 2, resource: { buffer: this.minMaxLevels[this.minMaxLevels.length - 1].output } },
+                        { binding: 3, resource: { buffer: this.mortonOutputBitsBuffer } },
+                        { binding: 4, resource: { buffer: this.mortonOutputTriangleIndexBuffer } } ]
+        });
+    }
+
+    //================================//
+    dispatchMortonPass(commandEncoder: GPUComputePassEncoder)
+    {
+        if (!this.mortonShaderModule || !this.mortonBindGroup) return;
+
+        const [dx, dy] = this.dispatchSize(Math.ceil(this.numTriangles / this.THREADS_PER_WORKGROUP));
+        commandEncoder.setPipeline(this.mortonPipeline);
+        commandEncoder.setBindGroup(0, this.mortonBindGroup);
+        commandEncoder.dispatchWorkgroups(dx, dy);
+    }
+
+    //============ Radix sort methods ====================//
+    initializeRadixSortPipelines(device: GPUDevice)
+    {
+        const totalElements = this.numTriangles;
+        this.WORKGROUP_COUNT = Math.ceil(totalElements / this.THREADS_PER_WORKGROUP);
+
+        this.radixSortShaderModule = device.createShaderModule({ label: 'Radix Sort Shader Module', code: radixBlockSumsWGSL });
+        this.reorderShaderModule = device.createShaderModule({ label: 'Radix Reorder Shader Module', code: radixReorderWGSL });
+        this.prefixSumShaderModule = device.createShaderModule({ label: 'Prefix Sum Reduce Shader Module', code: radixPrefixSum });
+
+        // Uniform bind group layout
+        this.uniformBindGroupLayout = device.createBindGroupLayout({
+            label: 'Uniform Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } } ]
+        });
+
+        this.uniformBuffers = [];
+        this.uniformBindGroups = [];
+        for( let i = 0; i < this.NUM_PASSES; i++)
+        {
+            const buffer = device.createBuffer({ label: `Radix Sort Uniform Buffer Pass ${i}`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+            device.queue.writeBuffer(buffer, 0, new Uint32Array([i * 2]));
+            const bindGroup = device.createBindGroup({ label: `Radix Sort Uniform Bind Group Pass ${i}`, layout: this.uniformBindGroupLayout, entries: [ { binding: 0, resource: { buffer: buffer } } ] });
+            this.uniformBindGroups.push(bindGroup);
+            this.uniformBuffers.push(buffer);
+        }
+
+        // Prefix sum bind group layout
+        this.prefixSumBindGroupLayout = device.createBindGroupLayout({
+            label: 'Prefix Sum Bind Group Layout',
+                entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // Data to scan / add to
+                            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' }} ] // block sums buffer
+        });
+        this.prefixSumPipelineLayout = device.createPipelineLayout({ label: 'Prefix Sum Pipeline Layout', bindGroupLayouts: [this.prefixSumBindGroupLayout] });
+
+        // Shared buffers
+        this.keysBufferA = this.mortonOutputBitsBuffer;
+        this.keysBufferB = device.createBuffer({
+            label: 'Radix Sort Keys Buffer B',
+            size: this.numTriangles * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.valuesBufferA = this.mortonOutputTriangleIndexBuffer;
+        this.valuesBufferB = device.createBuffer({
+            label: 'Radix Sort Values Buffer B',
+            size: this.numTriangles * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.localPrefixSumBuffer = device.createBuffer({
+            label: 'Radix Sort Local Prefix Sum Buffer',
+            size: this.numTriangles * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.blockSumBuffer = device.createBuffer({
+            label: 'Radix Sort Block Sum Buffer',
+            size: 4 * this.WORKGROUP_COUNT * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        // [1] Radix sort pipeline
+        this.radixSortBindGroupLayout = device.createBindGroupLayout({
+            label: 'Radix Sort Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // input array
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // local prefix sum buffer
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },]           // block sums buffer
+        });
+        this.radixSortPipelineLayout = device.createPipelineLayout({ label: 'Radix Sort Pipeline Layout', bindGroupLayouts: [this.radixSortBindGroupLayout, this.uniformBindGroupLayout] });
+        this.radixSortPipeline = device.createComputePipeline({
+            label: 'Radix Sort Pipeline',
+            layout: this.radixSortPipelineLayout,
+            compute: {
+                module: this.radixSortShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, X_SIZE: this.SIZE_X, Y_SIZE: this.SIZE_Y, ELEMENT_COUNT: this.numTriangles, WORKGROUP_COUNT: this.WORKGROUP_COUNT }
+            },
+        });
+        this.radixSortBindGroups = [
+            device.createBindGroup({
+                label: 'Radix Sort Bind Group',
+                layout: this.radixSortBindGroupLayout,
+                entries: [  { binding: 0, resource: { buffer: this.keysBufferA } }, 
+                            { binding: 1, resource: { buffer: this.localPrefixSumBuffer } }, 
+                            { binding: 2, resource: { buffer: this.blockSumBuffer } } ]
+            }),
+            device.createBindGroup({
+                label: 'Radix Sort Bind Group 2',
+                layout: this.radixSortBindGroupLayout,
+                entries: [  { binding: 0, resource: { buffer: this.keysBufferB } },
+                            { binding: 1, resource: { buffer: this.localPrefixSumBuffer } },
+                            { binding: 2, resource: { buffer: this.blockSumBuffer } } ]
+            })
+        ];
+
+        // [2] Reorder pipeline
+        this.reorderBindGroupLayout = device.createBindGroupLayout({
+            label: 'Reorder Bind Group Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // input keys
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // output keys
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // local prefix sum buffer
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // block sums buffer
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },  // input values
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },]          // output values
+        });
+        this.reorderPipelineLayout = device.createPipelineLayout({ label: 'Reorder Pipeline Layout', bindGroupLayouts: [this.reorderBindGroupLayout, this.uniformBindGroupLayout] });
+        this.reorderPipeline = device.createComputePipeline({
+            label: 'Reorder Pipeline',
+            layout: this.reorderPipelineLayout,
+            compute: {
+                module: this.reorderShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, X_SIZE: this.SIZE_X, Y_SIZE: this.SIZE_Y, ELEMENT_COUNT: this.numTriangles, WORKGROUP_COUNT: this.WORKGROUP_COUNT }
+            },
+        });
+        this.reorderBindGroups = [
+            device.createBindGroup({
+                label: 'Reorder Bind Group',
+                layout: this.reorderBindGroupLayout,
+                entries: [  { binding: 0, resource: { buffer: this.keysBufferA } },
+                            { binding: 1, resource: { buffer: this.keysBufferB } },
+                            { binding: 2, resource: { buffer: this.localPrefixSumBuffer } },
+                            { binding: 3, resource: { buffer: this.blockSumBuffer } },
+                            { binding: 4, resource: { buffer: this.valuesBufferA } },
+                            { binding: 5, resource: { buffer: this.valuesBufferB } } ]
+            }),
+            device.createBindGroup({
+                label: 'Reorder Bind Group 2',
+                layout: this.reorderBindGroupLayout,
+                entries: [  { binding: 0, resource: { buffer: this.keysBufferB } },
+                            { binding: 1, resource: { buffer: this.keysBufferA } },
+                            { binding: 2, resource: { buffer: this.localPrefixSumBuffer } },
+                            { binding: 3, resource: { buffer: this.blockSumBuffer } },
+                            { binding: 4, resource: { buffer: this.valuesBufferB } },
+                            { binding: 5, resource: { buffer: this.valuesBufferA } } ]
+            })
+        ];
+
+        // [3] Prefix sum pipeline
+        this.prefixSumLevels = [];
+        let currentElementCount = 4 * this.WORKGROUP_COUNT;
+        let currentDataBuffer = this.blockSumBuffer;
+
+        while(true)
+        {
+            const workgroupCount = Math.ceil(currentElementCount / this.ITEMS_PER_WORKGROUP);
+            const [dx, dy] = this.dispatchSize(workgroupCount);
+
+            const blockSumBuffer = device.createBuffer({ label: `Prefix Sum Block Sum Buffer Level ${this.prefixSumLevels.length}`, size: Math.max(workgroupCount, 1) * 4, usage: GPUBufferUsage.STORAGE });
+            const reducePipeline = device.createComputePipeline({
+                label: `Prefix Sum Reduce Pipeline Level ${this.prefixSumLevels.length}`,
+                layout: this.prefixSumPipelineLayout,
+                compute: {
+                    module: this.prefixSumShaderModule,
+                    entryPoint: 'cs_reduce',
+                    constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, X_SIZE: this.SIZE_X, Y_SIZE: this.SIZE_Y, ITEMS_PER_WORKGROUP: this.ITEMS_PER_WORKGROUP,ELEMENT_COUNT: currentElementCount }
+                }
+            });
+            const addPipeline = device.createComputePipeline({
+                label: `Prefix Sum Add Pipeline Level ${this.prefixSumLevels.length}`,
+                layout: this.prefixSumPipelineLayout,
+                compute: {
+                    module: this.prefixSumShaderModule,
+                    entryPoint: 'cs_add',
+                    constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, X_SIZE: this.SIZE_X, Y_SIZE: this.SIZE_Y, ITEMS_PER_WORKGROUP: this.ITEMS_PER_WORKGROUP,ELEMENT_COUNT: currentElementCount }
+                }
+            });
+
+            const bindGroup = device.createBindGroup({
+                label: `Prefix Sum Bind Group Level ${this.prefixSumLevels.length}`,
+                layout: this.prefixSumBindGroupLayout,
+                entries: [ { binding: 0, resource: { buffer: currentDataBuffer } }, { binding: 1, resource: { buffer: blockSumBuffer } } ]
+            });
+
+            this.prefixSumLevels.push({ elementCount: currentElementCount, workgroupCount: workgroupCount, reducePipeline: reducePipeline, addPipeline: addPipeline, bindGroup: bindGroup, dataBuffer: currentDataBuffer, blockSumBuffer: blockSumBuffer, dispatchX: dx, dispatchY: dy });
+
+            if (workgroupCount <= 1) break;
+
+            currentElementCount = workgroupCount;
+            currentDataBuffer = blockSumBuffer;
+        }
+    }
+
+    //================================//
+    dispatchRadixSort(commandEncoder: GPUComputePassEncoder)
+    {
+        const [dx, dy] = this.dispatchSize(this.WORKGROUP_COUNT);
+
+        for (let pass = 0; pass < this.NUM_PASSES; pass++)
+        {
+            const isEvenPass = (pass % 2 === 0);
+            let uniformBindGroup = this.uniformBindGroups[pass];
+
+            // [1] Radix sort pass
+            commandEncoder.setPipeline(this.radixSortPipeline);
+            commandEncoder.setBindGroup(0, isEvenPass ? this.radixSortBindGroups[0] : this.radixSortBindGroups[1]);
+            commandEncoder.setBindGroup(1, uniformBindGroup);
+            commandEncoder.dispatchWorkgroups(dx, dy, 1);
+
+            // [2] Prefix sum passes
+            const N = this.prefixSumLevels.length;
+            
+            for (let i = 0; i < N; i++)
+            {
+                const level = this.prefixSumLevels[i];
+                commandEncoder.setPipeline(level.reducePipeline);
+                commandEncoder.setBindGroup(0, level.bindGroup);
+                commandEncoder.dispatchWorkgroups(level.dispatchX, level.dispatchY, 1);
+            }
+
+            for (let i = N - 2; i >= 0; i--)
+            {
+                const level = this.prefixSumLevels[i];
+                commandEncoder.setPipeline(level.addPipeline);
+                commandEncoder.setBindGroup(0, level.bindGroup);
+                commandEncoder.dispatchWorkgroups(level.dispatchX, level.dispatchY, 1);
+            }
+
+            // [3] Reorder pass
+            commandEncoder.setPipeline(this.reorderPipeline);
+            commandEncoder.setBindGroup(0, isEvenPass ? this.reorderBindGroups[0] : this.reorderBindGroups[1]);
+            commandEncoder.setBindGroup(1, uniformBindGroup);
+            commandEncoder.dispatchWorkgroups(dx, dy, 1);
         }
     }
 }
@@ -912,7 +1264,6 @@ class RayTracer
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
         this.device.queue.writeBuffer(this.rayTracerObjects.worldPositionStorageBuffer, 0, worldPositionData as BufferSource);
-        this.fastBVH.initializeMinMaxPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, worldPositionData.length / 3);
 
         this.rayTracerObjects.normalStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Normal Storage Buffer',
@@ -982,6 +1333,12 @@ class RayTracer
                 }
             ],
         });
+
+        // FastBVH Pipeline
+        this.fastBVH.initializeMinMaxPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, worldPositionData.length / 3);
+        const numTriangles = indexData.length / 3;
+        this.fastBVH.initializeMortonPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer, numTriangles);
+        this.fastBVH.initializeRadixSortPipelines(this.device);
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -1369,7 +1726,7 @@ class RayTracer
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
 
             const computePass = encoder.beginComputePass({ label: 'MinMax Compute Pass' });
-            this.fastBVH.dispatchMinMaxPasses(computePass);
+            this.fastBVH.dispatch(computePass);
             computePass.end();
             if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped')
                 this.fastBVH.copyResultForReadback(encoder);
@@ -1535,7 +1892,7 @@ class RayTracer
         if (meshIndex < 0 || meshIndex >= (this.meshesInfo?.meshIndices.length || 0)) return;
 
         const matName: string = newMaterial.name;
-        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName) || -1;
+        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName);
         if (totalMaterialIndex === -1) return;
 
         this.meshesInfo!.meshMaterials[meshIndex] = newMaterial;
@@ -1557,7 +1914,7 @@ class RayTracer
     recreateBindGroup(material: Material)
     {
         const matName: string = material.name;
-        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName) || -1;
+        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName);
         if (totalMaterialIndex === -1) return;
 
         const newBindGroup = this.device!.createBindGroup({

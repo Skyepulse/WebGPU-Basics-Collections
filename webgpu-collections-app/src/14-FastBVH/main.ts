@@ -18,6 +18,7 @@ import mortonCodeWGSL from './FastBVHShaders/mortonCode.wgsl?raw';
 import radixBlockSumsWGSL from './FastBVHShaders/radixBlockSums.wgsl?raw';
 import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
 import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
+import patriciaTreeWGSL from './FastBVHShaders/patriciaTree.wgsl?raw';
 
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
@@ -53,9 +54,13 @@ interface PrefixSumLevel
     dispatchY: number;
 }
 
+const BVHNodeSize = 48;
 //================================//
 class FastParallelBVH
 {
+    debug: boolean = false;
+
+    //================================//
     private THREADS_PER_WORKGROUP = 256;
     private SIZE_X = 16;
     private SIZE_Y = 16;
@@ -111,6 +116,17 @@ class FastParallelBVH
     private uniformBindGroups!: GPUBindGroup[];
     private uniformBindGroupLayout!: GPUBindGroupLayout;
 
+    //============== Patricia Tree objects ==================//
+    private patriciaTreeShaderModule!: GPUShaderModule;
+    private patriciaTreeBindGroupLayout!: GPUBindGroupLayout;
+    private patriciaTreePipelineLayout!: GPUPipelineLayout;
+    private patriciaTreePipeline!: GPUComputePipeline;
+    private patriciaTreeBindGroup!: GPUBindGroup;
+
+    private mortonCodesBuffer!: GPUBuffer;
+    private internalNodesBuffer!: GPUBuffer;
+    private leafNodesBuffer!: GPUBuffer;
+
     //================================//
     constructor()
     {
@@ -122,6 +138,7 @@ class FastParallelBVH
         this.dispatchMinMaxPass(commandEncoder);
         this.dispatchMortonPass(commandEncoder);
         this.dispatchRadixSort(commandEncoder);
+        this.dispatchPatriciaTreePass(commandEncoder);
     }
 
     //================================//
@@ -518,6 +535,62 @@ class FastParallelBVH
             commandEncoder.dispatchWorkgroups(dx, dy, 1);
         }
     }
+
+    //============= Patricia Tree Methods ===================//
+    initializePatriciaTreePipeline(device: GPUDevice)
+    {
+        this.patriciaTreeShaderModule = device.createShaderModule({ label: 'Patricia Tree Shader Module', code: patriciaTreeWGSL });
+        this.patriciaTreeBindGroupLayout = device.createBindGroupLayout({
+            label: 'Patricia Tree Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // morton codes buffer
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // internal nodes buffer
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },]           // leaf nodes buffer
+        });
+        this.patriciaTreePipelineLayout = device.createPipelineLayout({ label: 'Patricia Tree Pipeline Layout', bindGroupLayouts: [this.patriciaTreeBindGroupLayout] });
+        this.patriciaTreePipeline = device.createComputePipeline({
+            label: 'Patricia Tree Pipeline',
+            layout: this.patriciaTreePipelineLayout,
+            compute: {
+                module: this.patriciaTreeShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, INTERNAL_NODE_COUNT: this.numTriangles - 1, LEAF_NODE_COUNT: this.numTriangles }
+            },
+        });
+
+        this.mortonCodesBuffer = this.keysBufferB; // Results of the radix sort live in B (15 passes -> ends in B)
+
+        this.internalNodesBuffer = device.createBuffer({
+            label: 'BVH Internal Nodes Buffer',
+            size: (this.numTriangles - 1) * BVHNodeSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+        this.leafNodesBuffer = device.createBuffer({
+            label: 'BVH Leaf Nodes Buffer',
+            size: this.numTriangles * 4, // u32 array
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.patriciaTreeBindGroup = device.createBindGroup({
+            label: 'Patricia Tree Bind Group',
+            layout: this.patriciaTreeBindGroupLayout,
+            entries: [  { binding: 0, resource: { buffer: this.mortonCodesBuffer } },
+                        { binding: 1, resource: { buffer: this.internalNodesBuffer } },
+                        { binding: 2, resource: { buffer: this.leafNodesBuffer } } ]
+        });
+    }
+
+    //================================//
+    dispatchPatriciaTreePass(commandEncoder: GPUComputePassEncoder)
+    {
+        if (!this.patriciaTreePipeline || !this.patriciaTreeBindGroup) return;
+
+        const internalNodeCount = this.numTriangles - 1;
+        const dispatchX = Math.ceil(internalNodeCount / this.THREADS_PER_WORKGROUP);
+
+        commandEncoder.setPipeline(this.patriciaTreePipeline);
+        commandEncoder.setBindGroup(0, this.patriciaTreeBindGroup);
+        commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+    }
 }
 //============== END PAPER IMPLEMENTATION ==================//
 
@@ -694,6 +767,9 @@ class RayTracer
     {
         const utilElement = getUtilElement();
         if (!utilElement) return;
+
+        addCheckbox('Debug', this.fastBVH.debug, utilElement, (value) => { this.fastBVH.debug = value; });
+        utilElement.appendChild(document.createElement('br'));
 
         addCheckbox('Use Ray Tracing', this.useRaytracing, utilElement, (value) => { this.useRaytracing = value; });
         utilElement.appendChild(document.createElement('br'));
@@ -1728,7 +1804,8 @@ class RayTracer
             const computePass = encoder.beginComputePass({ label: 'MinMax Compute Pass' });
             this.fastBVH.dispatch(computePass);
             computePass.end();
-            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped')
+
+            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
                 this.fastBVH.copyResultForReadback(encoder);
 
             const pass = encoder.beginRenderPass(renderPassDescriptor);
@@ -1785,7 +1862,7 @@ class RayTracer
             const commandBuffer = encoder.finish();
             this.device.queue.submit([commandBuffer]);
 
-            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped')
+            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
             {
                 this.fastBVH.minMaxReadbackBuffer.mapAsync(GPUMapMode.READ).then(() =>
                 {
@@ -1813,7 +1890,7 @@ class RayTracer
                 FPS: ${(1000/dt).toFixed(1)}
                 JS Time: ${jsTime.toFixed(1)} ms
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
-                ${this.minMaxBoundsText}
+                ${this.fastBVH.debug ? this.minMaxBoundsText : ''}
                 `
                 this.infoElement.textContent = content;
             }

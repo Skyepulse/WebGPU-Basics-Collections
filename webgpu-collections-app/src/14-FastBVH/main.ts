@@ -25,7 +25,7 @@ import wireframeWGSL from './FastBVHShaders/wireframe.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { addButton, addCheckbox, addNumberInput, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
+import { addButton, addCheckbox, addNumberInput, addProfilerFrameTime, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay } from '@src/helpers/CameraHelpers';
 import { fastBVHExampleScene, type Ray, type SceneInformation } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
@@ -783,7 +783,7 @@ enum RayTracerMode
 }
 
 //================================//
-interface normalObjects extends PipelineResources
+interface NO extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
 
@@ -813,7 +813,7 @@ interface normalObjects extends PipelineResources
     bvhShaderModule: ShaderModule | null; 
 };
 
-interface rayTracerObjects extends PipelineResources
+interface RO extends PipelineResources
 {
     uniformBuffer: GPUBuffer;
 
@@ -863,8 +863,8 @@ class RayTracer
     private a_c: number = 1.0;
     private a_l: number = 0.09;
     private a_q: number = 0.0032;
-    private normalObjects: normalObjects;
-    private rayTracerObjects: rayTracerObjects;
+    private NO: NO;
+    private RO: RO;
 
     //================================//
     private useRaytracing: boolean = true;
@@ -898,36 +898,36 @@ class RayTracer
         this.camera.moveSpeed = 5.0;
         this.camera.rotateSpeed = 0.02;
         this.device = null;
-        this.normalObjects = {} as normalObjects;
-        this.rayTracerObjects = {} as rayTracerObjects;
+        this.NO = {} as NO;
+        this.RO = {} as RO;
 
         const light1 = {
             position: glm.vec3.fromValues(0, 100, 0),
-            intensity: 5000.0,
+            intensity: 200.0,
             direction: glm.vec3.fromValues(0, -1, 0),
             coneAngle: Math.PI / 2,
-            color: glm.vec3.fromValues(0.85, 0.1, 0.1),
+            color: glm.vec3.fromValues(0.1, 0.1, 0.85),
             enabled: true
         };
         this.lights.push(light1);
 
         const light2 = {
-            position: glm.vec3.fromValues(0, 500.0, 0), 
-            intensity: 5000.0,
-            direction: glm.vec3.fromValues(0.5, -0.9, 1),
-            coneAngle: Math.PI / 6,
+            position: glm.vec3.fromValues(100.0, 100.0, 0), 
+            intensity: 1000.0,
+            direction: glm.vec3.fromValues(-1, -3, 0),
+            coneAngle: Math.PI / 5,
             color: glm.vec3.fromValues(0.1, 0.85, 0.1),
-            enabled: false
+            enabled: true
         };
         this.lights.push(light2);
 
         const light3 = {
-            position: glm.vec3.fromValues(0, 255, 0),
-            intensity: 10000.0,
-            direction: glm.vec3.fromValues(0, 0, 1),
-            coneAngle: Math.PI / 3,
-            color: glm.vec3.fromValues(0.9, 0.9, 0.9),
-            enabled: false
+            position: glm.vec3.fromValues(-100.0, 100.0, 0),
+            intensity: 1000.0,
+            direction: glm.vec3.fromValues(1, -3, 0),
+            coneAngle: Math.PI / 5,
+            color: glm.vec3.fromValues(0.85, 0.1, 0.1),
+            enabled: true
         };
         this.lights.push(light3);
     }
@@ -984,7 +984,8 @@ class RayTracer
     }
 
     //================================//
-    async initialize(canvas: HTMLCanvasElement) {
+    async initialize(canvas: HTMLCanvasElement) 
+    {
         this.canvas = canvas;
         this.device = await RequestWebGPUDevice(['timestamp-query']);
         if (this.device === null || this.device === undefined) 
@@ -996,7 +997,8 @@ class RayTracer
         this.context = canvas.getContext('webgpu');
         this.presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
-        if (!this.context) {
+        if (!this.context) 
+        {
             console.error("WebGPU context is not available.");
             return;
         }
@@ -1018,9 +1020,9 @@ class RayTracer
     {
         if (this.device === null) return;
 
-        this.rayTracerObjects.shaderModule = CreateShaderModule(this.device, rayTraceVertWGSL, rayTraceFragWGSL, 'Ray Trace Shader Module');
-        this.normalObjects.shaderModule = CreateShaderModule(this.device, rasterVertWgsl, rasterFragWgsl, 'Normal Shader Module');
-        this.normalObjects.bvhShaderModule = CreateShaderModule(this.device, bvhVertWGSL, bvhFragWGSL, 'BVH Draw Shader Module');
+        this.RO.shaderModule = CreateShaderModule(this.device, rayTraceVertWGSL, rayTraceFragWGSL, 'Ray Trace Shader Module');
+        this.NO.shaderModule = CreateShaderModule(this.device, rasterVertWgsl, rasterFragWgsl, 'Normal Shader Module');
+        this.NO.bvhShaderModule = CreateShaderModule(this.device, bvhVertWGSL, bvhFragWGSL, 'BVH Draw Shader Module');
     }
 
     //================================//
@@ -1029,7 +1031,7 @@ class RayTracer
         if (this.device === null || this.presentationFormat === null) return;
 
         // RAY TRACE PIPELINE
-        this.rayTracerObjects.bindGroupLayout = this.device.createBindGroupLayout({
+        this.RO.bindGroupLayout = this.device.createBindGroupLayout({
             label: 'Ray Trace Bind Group Layout',
             entries: [
                 {
@@ -1069,7 +1071,7 @@ class RayTracer
                 }
             ],
         });
-        this.rayTracerObjects.materialBindGroupLayout = this.device.createBindGroupLayout({
+        this.RO.materialBindGroupLayout = this.device.createBindGroupLayout({
             label: 'Ray Trace Material Bind Group Layout',
             entries: [{
                 binding: 0,
@@ -1088,21 +1090,21 @@ class RayTracer
             }]
         });
 
-        this.rayTracerObjects.pipelineLayout = this.device.createPipelineLayout({
+        this.RO.pipelineLayout = this.device.createPipelineLayout({
             label: 'Ray Trace Pipeline Layout',
-            bindGroupLayouts: [this.rayTracerObjects.bindGroupLayout, this.rayTracerObjects.materialBindGroupLayout],
+            bindGroupLayouts: [this.RO.bindGroupLayout, this.RO.materialBindGroupLayout],
         });
 
-        if (this.rayTracerObjects.shaderModule !== null) {
-            this.rayTracerObjects.pipeline = this.device.createRenderPipeline({
+        if (this.RO.shaderModule !== null) {
+            this.RO.pipeline = this.device.createRenderPipeline({
                 label: 'Ray Trace Pipeline',
-                layout: this.rayTracerObjects.pipelineLayout,
+                layout: this.RO.pipelineLayout,
                 vertex: {
-                    module: this.rayTracerObjects.shaderModule.vertex,
+                    module: this.RO.shaderModule.vertex,
                     entryPoint: 'vs',
                 },
                 fragment: {
-                    module: this.rayTracerObjects.shaderModule.fragment,
+                    module: this.RO.shaderModule.fragment,
                     entryPoint: 'fs',
                     targets: [
                         {
@@ -1114,7 +1116,7 @@ class RayTracer
         }
 
         // NORMAL PIPELINE
-        this.normalObjects.bindGroupLayout = this.device.createBindGroupLayout({
+        this.NO.bindGroupLayout = this.device.createBindGroupLayout({
             label: 'Normal Bind Group Layout',
             entries: [{
                 binding: 0,
@@ -1122,7 +1124,7 @@ class RayTracer
                 buffer: { type: "uniform" },
             }]
         });
-        this.normalObjects.materialUniformBindGroupLayout = this.device.createBindGroupLayout({
+        this.NO.materialUniformBindGroupLayout = this.device.createBindGroupLayout({
             label: 'Material Uniform Bind Group Layout',
             entries: [{
                 binding: 0,
@@ -1166,28 +1168,28 @@ class RayTracer
             }],
         });
 
-        this.normalObjects.pipelineLayout = this.device.createPipelineLayout({
+        this.NO.pipelineLayout = this.device.createPipelineLayout({
             label: 'Normal Pipeline Layout',
-            bindGroupLayouts: [this.normalObjects.bindGroupLayout, this.normalObjects.materialUniformBindGroupLayout],
+            bindGroupLayouts: [this.NO.bindGroupLayout, this.NO.materialUniformBindGroupLayout],
         });
 
-        this.normalObjects.bvhDrawPipelineLayout = this.device.createPipelineLayout({
+        this.NO.bvhDrawPipelineLayout = this.device.createPipelineLayout({
             label: 'BVH Draw Pipeline Layout',
-            bindGroupLayouts: [this.normalObjects.bindGroupLayout, this.normalObjects.materialUniformBindGroupLayout],
+            bindGroupLayouts: [this.NO.bindGroupLayout, this.NO.materialUniformBindGroupLayout],
         });
 
-        this.normalObjects.depthTexture = this.device.createTexture({
+        this.NO.depthTexture = this.device.createTexture({
             size: [this.canvas!.width, this.canvas!.height],
             format: "depth24plus",
             usage: GPUTextureUsage.RENDER_ATTACHMENT,
         });
 
-        if (this.normalObjects.shaderModule !== null) {
-            this.normalObjects.pipeline = this.device.createRenderPipeline({
+        if (this.NO.shaderModule !== null) {
+            this.NO.pipeline = this.device.createRenderPipeline({
                 label: 'Normal Pipeline',
-                layout: this.normalObjects.pipelineLayout,
+                layout: this.NO.pipelineLayout,
                 vertex: {
-                    module: this.normalObjects.shaderModule.vertex,
+                    module: this.NO.shaderModule.vertex,
                     entryPoint: 'vs',
                     buffers: [{
                                 arrayStride: 3 * 4,
@@ -1209,7 +1211,7 @@ class RayTracer
                             }]
                 },
                 fragment: {
-                    module: this.normalObjects.shaderModule.fragment,
+                    module: this.NO.shaderModule.fragment,
                     entryPoint: 'fs',
                     targets: [
                         {
@@ -1228,11 +1230,11 @@ class RayTracer
                 },
             });
 
-            this.normalObjects.bvhDrawPipeline = this.device.createRenderPipeline({
+            this.NO.bvhDrawPipeline = this.device.createRenderPipeline({
                 label: 'BVH Draw Pipeline',
-                layout: this.normalObjects.bvhDrawPipelineLayout,
+                layout: this.NO.bvhDrawPipelineLayout,
                 vertex: {
-                    module: this.normalObjects.bvhShaderModule!.vertex,
+                    module: this.NO.bvhShaderModule!.vertex,
                     entryPoint: 'vsBVH',
                     buffers: [
                         {
@@ -1242,7 +1244,7 @@ class RayTracer
                     ]
                 },
                 fragment: {
-                    module: this.normalObjects.bvhShaderModule!.fragment,
+                    module: this.NO.bvhShaderModule!.fragment,
                     entryPoint: 'fsBVH',
                     targets: [
                         {
@@ -1264,7 +1266,7 @@ class RayTracer
         this.timestampQuerySet = CreateTimestampQuerySet(this.device, 2);
 
         // Samplers
-        this.normalObjects.sampler = this.device.createSampler({
+        this.NO.sampler = this.device.createSampler({
             label: 'Normal Objects Sampler',
             magFilter: "linear",
             minFilter: "linear",
@@ -1273,7 +1275,7 @@ class RayTracer
             addressModeV: "repeat",
         });
 
-        this.rayTracerObjects.sampler = this.device.createSampler({
+        this.RO.sampler = this.device.createSampler({
             label: 'Ray Tracer Sampler',
             magFilter: "linear",
             minFilter: "linear",
@@ -1293,57 +1295,57 @@ class RayTracer
 
         const meshMaterials = this.meshesInfo?.meshMaterials || [];
         const info: SceneInformation = await fastBVHExampleScene(meshMaterials, this.seed, this.numSpheres);
-        this.normalObjects.sceneInformation = info;
+        this.NO.sceneInformation = info;
         this.meshesInfo = info.additionalInfo;
         const worldPositionData: Float32Array = this.meshesInfo.worldPositionData;
-        this.rayTracerObjects.perMeshWorldPositionOffsets = this.meshesInfo.perMeshWorldPositionOffsets;
+        this.RO.perMeshWorldPositionOffsets = this.meshesInfo.perMeshWorldPositionOffsets;
 
         const numMaterials = info.meshes.length;
-        this.normalObjects.materialUniforms = [];
-        this.normalObjects.materialBindGroups = [];
-        this.normalObjects.positionBuffers = [];
-        this.normalObjects.normalBuffers = [];
-        this.normalObjects.uvBuffers = [];
-        this.normalObjects.indexBuffers = [];
+        this.NO.materialUniforms = [];
+        this.NO.materialBindGroups = [];
+        this.NO.positionBuffers = [];
+        this.NO.normalBuffers = [];
+        this.NO.uvBuffers = [];
+        this.NO.indexBuffers = [];
 
-        this.normalObjects.meshesModelMatrixBuffers = [];
-        this.normalObjects.meshesNormalMatrixBuffers = [];
+        this.NO.meshesModelMatrixBuffers = [];
+        this.NO.meshesNormalMatrixBuffers = [];
 
         for (let matNum = 0; matNum < numMaterials; matNum++)
         {
-            this.normalObjects.meshesModelMatrixBuffers.push(this.device.createBuffer({
+            this.NO.meshesModelMatrixBuffers.push(this.device.createBuffer({
                 label: 'Mesh Model Matrix Buffer ' + matNum,
                 size: 16 * 4,
                 usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.meshesModelMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatWorldMatrix() as BufferSource);
+            this.device.queue.writeBuffer(this.NO.meshesModelMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatWorldMatrix() as BufferSource);
 
-            this.normalObjects.meshesNormalMatrixBuffers.push(this.device.createBuffer({
+            this.NO.meshesNormalMatrixBuffers.push(this.device.createBuffer({
                 label: 'Mesh Normal Matrix Buffer ' + matNum,
                 size: 16 * 4,
                 usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.meshesNormalMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatNormalMatrix() as BufferSource);
+            this.device.queue.writeBuffer(this.NO.meshesNormalMatrixBuffers[matNum], 0, info.meshes[matNum].GetFlatNormalMatrix() as BufferSource);
 
-            this.normalObjects.materialUniforms.push(this.device.createBuffer({
+            this.NO.materialUniforms.push(this.device.createBuffer({
                 label: 'Material Uniform Buffer ' + matNum,
                 size: MATERIAL_SIZE * 4,
                 usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
             }));
 
             const materialData = info.meshes[matNum].GetFlattenedMaterial();
-            this.device.queue.writeBuffer(this.normalObjects.materialUniforms[matNum], 0, materialData as BufferSource);
+            this.device.queue.writeBuffer(this.NO.materialUniforms[matNum], 0, materialData as BufferSource);
 
-            this.normalObjects.materialBindGroups.push(this.device.createBindGroup({
+            this.NO.materialBindGroups.push(this.device.createBindGroup({
                 label: 'Material Bind Group ' + matNum,
-                layout: this.normalObjects.materialUniformBindGroupLayout,
+                layout: this.NO.materialUniformBindGroupLayout,
                 entries: [{
                     binding: 0,
-                    resource: { buffer: this.normalObjects.materialUniforms[matNum] },
+                    resource: { buffer: this.NO.materialUniforms[matNum] },
                 },
                 {
                     binding: 1,
-                    resource: this.normalObjects.sampler,
+                    resource: this.NO.sampler,
                 },
                 {
                     binding: 2,
@@ -1363,72 +1365,72 @@ class RayTracer
                 },
                 {
                     binding: 6,
-                    resource: { buffer: this.normalObjects.meshesModelMatrixBuffers[matNum] },
+                    resource: { buffer: this.NO.meshesModelMatrixBuffers[matNum] },
                 },
                 {
                         binding: 7,
-                        resource: { buffer: this.normalObjects.meshesNormalMatrixBuffers[matNum] },
+                        resource: { buffer: this.NO.meshesNormalMatrixBuffers[matNum] },
                 }],
             }));
 
             const vertData = info.meshes[matNum].getVertexData();
-            this.normalObjects.positionBuffers.push(this.device.createBuffer({
+            this.NO.positionBuffers.push(this.device.createBuffer({
                 label: 'Normal Position Buffer ' + matNum,
                 size: vertData.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.positionBuffers[matNum], 0, vertData as BufferSource);
+            this.device.queue.writeBuffer(this.NO.positionBuffers[matNum], 0, vertData as BufferSource);
 
             const indexData = info.meshes[matNum].getIndexData16();
-            this.normalObjects.indexBuffers.push(this.device.createBuffer({
+            this.NO.indexBuffers.push(this.device.createBuffer({
                 label: 'Normal Index Buffer ' + matNum,
                 size: indexData.byteLength,
                 usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.indexBuffers[matNum], 0, indexData as BufferSource);
+            this.device.queue.writeBuffer(this.NO.indexBuffers[matNum], 0, indexData as BufferSource);
 
             const normalData = info.meshes[matNum].getNormalData();
-            this.normalObjects.normalBuffers.push(this.device.createBuffer({
+            this.NO.normalBuffers.push(this.device.createBuffer({
                 label: 'Normal Normal Buffer ' + matNum,
                 size: normalData.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.normalBuffers[matNum], 0, normalData as BufferSource);
+            this.device.queue.writeBuffer(this.NO.normalBuffers[matNum], 0, normalData as BufferSource);
 
             const uvData = info.meshes[matNum].getUVData();
-            this.normalObjects.uvBuffers.push(this.device.createBuffer({
+            this.NO.uvBuffers.push(this.device.createBuffer({
                 label: 'Normal UV Buffer ' + matNum,
                 size: uvData.byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             }));
-            this.device.queue.writeBuffer(this.normalObjects.uvBuffers[matNum], 0, uvData as BufferSource);
+            this.device.queue.writeBuffer(this.NO.uvBuffers[matNum], 0, uvData as BufferSource);
         }
 
-        this.normalObjects.uniformBuffer = this.device.createBuffer({
+        this.NO.uniformBuffer = this.device.createBuffer({
             label: 'Normal Uniform Buffer',
             size: normalUniformDataSize,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
         });
 
-        this.normalObjects.bindGroup = this.device.createBindGroup({
+        this.NO.bindGroup = this.device.createBindGroup({
             label: 'Normal Bind Group',
-            layout: this.normalObjects.bindGroupLayout,
+            layout: this.NO.bindGroupLayout,
             entries: [{
                 binding: 0,
-                resource: { buffer: this.normalObjects.uniformBuffer },
+                resource: { buffer: this.NO.uniformBuffer },
             }],
         });
 
         const lineData: Float32Array[] = this.getBVHGeometry(Infinity); // This way create buffer at max capacity
-        this.normalObjects.bvhLineGeometryBuffers = [];
+        this.NO.bvhLineGeometryBuffers = [];
         for (let i = 0; i < lineData.length; i++)
         {
-            this.normalObjects.bvhLineGeometryBuffers[i] = this.device.createBuffer({
+            this.NO.bvhLineGeometryBuffers[i] = this.device.createBuffer({
                 label: `BVH Line Geometry Buffer ${i}`,
                 size: lineData[i].byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             });
-            this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
+            this.device.queue.writeBuffer(this.NO.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
         }
 
         // Ray Tracer Objects Buffers
@@ -1495,102 +1497,102 @@ class RayTracer
             bvhDataOffset += chunk.byteLength;
         }
 
-        this.rayTracerObjects.uniformBuffer = this.device.createBuffer({
+        this.RO.uniformBuffer = this.device.createBuffer({
             label: 'Ray Tracer Uniform Buffer',
             size: rayTracerUniformDataSize,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
         });
 
-        this.rayTracerObjects.positionStorageBuffer = this.device.createBuffer({
+        this.RO.positionStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Position Storage Buffer',
             size: positionData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.positionStorageBuffer, 0, positionData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.positionStorageBuffer, 0, positionData as BufferSource);
 
-        this.rayTracerObjects.worldPositionStorageBuffer = this.device.createBuffer({
+        this.RO.worldPositionStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer World Position Storage Buffer',
             size: worldPositionData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.worldPositionStorageBuffer, 0, worldPositionData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.worldPositionStorageBuffer, 0, worldPositionData as BufferSource);
 
-        this.rayTracerObjects.normalStorageBuffer = this.device.createBuffer({
+        this.RO.normalStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Normal Storage Buffer',
             size: normalData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.normalStorageBuffer, 0, normalData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.normalStorageBuffer, 0, normalData as BufferSource);
 
-        this.rayTracerObjects.uvStorageBuffer = this.device.createBuffer({
+        this.RO.uvStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer UV Storage Buffer',
             size: uvData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.uvStorageBuffer, 0, uvData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.uvStorageBuffer, 0, uvData as BufferSource);
 
-        this.rayTracerObjects.indexStorageBuffer = this.device.createBuffer({
+        this.RO.indexStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Index Storage Buffer',
             size: indexData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.indexStorageBuffer, 0, indexData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.indexStorageBuffer, 0, indexData as BufferSource);
 
-        this.rayTracerObjects.bvhNodesStorageBuffer = this.device.createBuffer({
+        this.RO.bvhNodesStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer BVH Nodes Storage Buffer',
             size: bvhNodesData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.bvhNodesStorageBuffer, 0, bvhNodesData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.bvhNodesStorageBuffer, 0, bvhNodesData as BufferSource);
 
-        this.rayTracerObjects.meshInstancesStorageBuffer = this.device.createBuffer({
+        this.RO.meshInstancesStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Mesh Instances Storage Buffer',
             size: meshInstancesData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.meshInstancesStorageBuffer, 0, meshInstancesData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.meshInstancesStorageBuffer, 0, meshInstancesData as BufferSource);
 
-        this.rayTracerObjects.bindGroup = this.device.createBindGroup({
+        this.RO.bindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Bind Group',
-            layout: this.rayTracerObjects.bindGroupLayout,
+            layout: this.RO.bindGroupLayout,
             entries: [{
                     binding: 0,
-                    resource: { buffer: this.rayTracerObjects.uniformBuffer },
+                    resource: { buffer: this.RO.uniformBuffer },
                 },
                 {
                     binding: 1,
-                    resource: { buffer: this.rayTracerObjects.positionStorageBuffer },
+                    resource: { buffer: this.RO.positionStorageBuffer },
                 },
                 {
                     binding: 2,
-                    resource: { buffer: this.rayTracerObjects.normalStorageBuffer },
+                    resource: { buffer: this.RO.normalStorageBuffer },
                 },
                 {
                     binding: 3,
-                    resource: { buffer: this.rayTracerObjects.uvStorageBuffer },
+                    resource: { buffer: this.RO.uvStorageBuffer },
                 },
                 {
                     binding: 4,
-                    resource: { buffer: this.rayTracerObjects.indexStorageBuffer },
+                    resource: { buffer: this.RO.indexStorageBuffer },
                 },
                 {
                     binding: 5,
-                    resource: { buffer: this.rayTracerObjects.bvhNodesStorageBuffer },
+                    resource: { buffer: this.RO.bvhNodesStorageBuffer },
                 },
                 {
                     binding: 6,
-                    resource: { buffer: this.rayTracerObjects.meshInstancesStorageBuffer },
+                    resource: { buffer: this.RO.meshInstancesStorageBuffer },
                 }
             ],
         });
 
         // FastBVH Pipeline
-        this.fastBVH.initializeMinMaxPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, worldPositionData.length / 3);
+        this.fastBVH.initializeMinMaxPipeline(this.device, this.RO.worldPositionStorageBuffer, worldPositionData.length / 3);
         const numTriangles = indexData.length / 3;
-        this.fastBVH.initializeMortonPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer, numTriangles);
+        this.fastBVH.initializeMortonPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer, numTriangles);
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
-        this.fastBVH.initializeAABBPipeline(this.device, this.rayTracerObjects.worldPositionStorageBuffer, this.rayTracerObjects.indexStorageBuffer);
+        this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
         this.fastBVH.initializeWireframePipeline(this.device, this.fastBVHDepth);
 
         // Identity matrix buffer
@@ -1605,10 +1607,10 @@ class RayTracer
         const placeholderTex = createPlaceholderTexture(this.device, 1024, 32);
         this.fastBVHWireframeBindGroup = this.device.createBindGroup({
             label: 'FastBVH Wireframe Draw Bind Group',
-            layout: this.normalObjects.materialUniformBindGroupLayout,
+            layout: this.NO.materialUniformBindGroupLayout,
             entries: [
-                { binding: 0, resource: { buffer: this.normalObjects.materialUniforms[0] } },
-                { binding: 1, resource: this.normalObjects.sampler },
+                { binding: 0, resource: { buffer: this.NO.materialUniforms[0] } },
+                { binding: 1, resource: this.NO.sampler },
                 { binding: 2, resource: placeholderTex.createView() },
                 { binding: 3, resource: placeholderTex.createView() },
                 { binding: 4, resource: placeholderTex.createView() },
@@ -1621,12 +1623,12 @@ class RayTracer
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
         const materialData = flattenMaterialArray(materials);
-        this.rayTracerObjects.materialBuffer = this.device.createBuffer({
+        this.RO.materialBuffer = this.device.createBuffer({
             label: 'Ray Tracer Material Storage Buffer',
             size: materialData.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.device.queue.writeBuffer(this.rayTracerObjects.materialBuffer, 0, materialData as BufferSource);
+        this.device.queue.writeBuffer(this.RO.materialBuffer, 0, materialData as BufferSource);
 
         // Texture array creation
         const numTexturesPerMaterial = 4;
@@ -1636,7 +1638,7 @@ class RayTracer
         const commonW = 1024;
         const commonH = 1024;
 
-        this.rayTracerObjects.textureArray = this.device.createTexture({
+        this.RO.textureArray = this.device.createTexture({
             label: 'Ray Tracer Material Texture Array',
             size: [commonW, commonH, numTexturesPerMaterial * numTexturedMaterials],
             format: 'rgba8unorm',
@@ -1656,40 +1658,40 @@ class RayTracer
 
             this.device.queue.copyExternalImageToTexture(
                 { source: albedoImage },
-                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial] },
+                { texture: this.RO.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial] },
                 [commonW, commonH]
             );
             this.device.queue.copyExternalImageToTexture(
                 { source: metalnessImage },
-                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 1] },
+                { texture: this.RO.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 1] },
                 [commonW, commonH]
             );
             this.device.queue.copyExternalImageToTexture(
                 { source: roughnessImage },
-                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 2] },
+                { texture: this.RO.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 2] },
                 [commonW, commonH]
             );
             this.device.queue.copyExternalImageToTexture(
                 { source: normalImage },
-                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 3] },
+                { texture: this.RO.textureArray, origin: [0, 0, matNum * numTexturesPerMaterial + 3] },
                 [commonW, commonH]
             );
         }
 
-        this.rayTracerObjects.materialBindGroup = this.device.createBindGroup({
+        this.RO.materialBindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Material Bind Group',
-            layout: this.rayTracerObjects.materialBindGroupLayout,
+            layout: this.RO.materialBindGroupLayout,
             entries: [{
                 binding: 0,
-                resource: { buffer: this.rayTracerObjects.materialBuffer },
+                resource: { buffer: this.RO.materialBuffer },
             },
             {
                 binding: 1,
-                resource: this.rayTracerObjects.sampler,
+                resource: this.RO.sampler,
             },
             {
                 binding: 2,
-                resource: this.rayTracerObjects.textureArray.createView(),
+                resource: this.RO.textureArray.createView(),
             }],
         });
     }
@@ -1842,7 +1844,7 @@ class RayTracer
                 floatView[baseIndex + 11] = light.enabled ? 1.0 : 0.0;
                 // pad
             }
-            this.device.queue.writeBuffer(this.rayTracerObjects.uniformBuffer, 0, data);
+            this.device.queue.writeBuffer(this.RO.uniformBuffer, 0, data);
         }
         else
         {
@@ -1873,14 +1875,14 @@ class RayTracer
                 floatView.set(light.color, baseIndex + 8);
                 floatView[baseIndex + 11] = light.enabled ? 1.0 : 0.0;
             }
-            this.device.queue.writeBuffer(this.normalObjects.uniformBuffer, 0, data as BufferSource);
+            this.device.queue.writeBuffer(this.NO.uniformBuffer, 0, data as BufferSource);
         }
     }
 
     //================================//
     animate()
     {
-        const meshes = this.normalObjects.sceneInformation.meshes;
+        const meshes = this.NO.sceneInformation.meshes;
         const totalMeshes = meshes.length;
         const time = performance.now() * 0.001;
 
@@ -1943,13 +1945,13 @@ class RayTracer
 
             mesh.SetTranslation(glm.vec3.fromValues(x, y, z));
 
-            this.device?.queue.writeBuffer(this.normalObjects.meshesModelMatrixBuffers[meshIndex], 0, mesh.GetFlatWorldMatrix() as BufferSource);
-            this.device?.queue.writeBuffer(this.normalObjects.meshesNormalMatrixBuffers[meshIndex], 0, mesh.GetFlatNormalMatrix() as BufferSource);
-            this.device?.queue.writeBuffer(this.rayTracerObjects.meshInstancesStorageBuffer, meshIndex * meshInstanceSize, mesh.GetFlatInverseWorldMatrix() as BufferSource);
+            this.device?.queue.writeBuffer(this.NO.meshesModelMatrixBuffers[meshIndex], 0, mesh.GetFlatWorldMatrix() as BufferSource);
+            this.device?.queue.writeBuffer(this.NO.meshesNormalMatrixBuffers[meshIndex], 0, mesh.GetFlatNormalMatrix() as BufferSource);
+            this.device?.queue.writeBuffer(this.RO.meshInstancesStorageBuffer, meshIndex * meshInstanceSize, mesh.GetFlatInverseWorldMatrix() as BufferSource);
 
             const worldPositions = mesh.getWorldVertexData();
-            const meshOffset = this.rayTracerObjects.perMeshWorldPositionOffsets[meshIndex];
-            this.device?.queue.writeBuffer(this.rayTracerObjects.worldPositionStorageBuffer, meshOffset, worldPositions as BufferSource);
+            const meshOffset = this.RO.perMeshWorldPositionOffsets[meshIndex];
+            this.device?.queue.writeBuffer(this.RO.worldPositionStorageBuffer, meshOffset, worldPositions as BufferSource);
         }
     }
 
@@ -1978,7 +1980,7 @@ class RayTracer
 
             const textureView = this.context.getCurrentTexture().createView();
             const depthStencilAttachment: GPURenderPassDepthStencilAttachment | undefined = !this.useRaytracing ? {
-                view: this.normalObjects.depthTexture.createView(),
+                view: this.NO.depthTexture.createView(),
                 depthLoadOp: 'clear' as const,
                 depthStoreOp: 'store' as const,
                 depthClearValue: 1.0,
@@ -2004,7 +2006,7 @@ class RayTracer
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
 
             this.fastBVH.clearAtomicCounters(encoder);
-            const computePass = encoder.beginComputePass({ label: 'MinMax Compute Pass' });
+            const computePass = encoder.beginComputePass({ label: 'Fast parallel BVH Compute Pass' });
             this.fastBVH.dispatch(computePass);
             computePass.end();
 
@@ -2015,44 +2017,44 @@ class RayTracer
 
             if (this.useRaytracing)
             {
-                pass.setPipeline(this.rayTracerObjects.pipeline);
-                pass.setBindGroup(0, this.rayTracerObjects.bindGroup);
-                pass.setBindGroup(1, this.rayTracerObjects.materialBindGroup);
+                pass.setPipeline(this.RO.pipeline);
+                pass.setBindGroup(0, this.RO.bindGroup);
+                pass.setBindGroup(1, this.RO.materialBindGroup);
                 pass.draw(6); // Fullscreen quad
             }
             else
             {
-                pass.setPipeline(this.normalObjects.pipeline);
-                pass.setBindGroup(0, this.normalObjects.bindGroup);
-                for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
+                pass.setPipeline(this.NO.pipeline);
+                pass.setBindGroup(0, this.NO.bindGroup);
+                for (let matNum = 0; matNum < this.NO.sceneInformation.meshes.length; matNum++)
                 {
-                    pass.setBindGroup(1, this.normalObjects.materialBindGroups[matNum]);
-                    pass.setVertexBuffer(0, this.normalObjects.positionBuffers[matNum]);
-                    pass.setVertexBuffer(1, this.normalObjects.normalBuffers[matNum]);
-                    pass.setVertexBuffer(2, this.normalObjects.uvBuffers[matNum]);
-                    pass.setIndexBuffer(this.normalObjects.indexBuffers[matNum], 'uint16');
+                    pass.setBindGroup(1, this.NO.materialBindGroups[matNum]);
+                    pass.setVertexBuffer(0, this.NO.positionBuffers[matNum]);
+                    pass.setVertexBuffer(1, this.NO.normalBuffers[matNum]);
+                    pass.setVertexBuffer(2, this.NO.uvBuffers[matNum]);
+                    pass.setIndexBuffer(this.NO.indexBuffers[matNum], 'uint16');
 
-                    pass.drawIndexed(this.normalObjects.indexBuffers[matNum].size / 2, 1, 0, 0, 0);
+                    pass.drawIndexed(this.NO.indexBuffers[matNum].size / 2, 1, 0, 0, 0);
                 }
 
                 // CPU BVH Rendering
                 if (this.showBVH)
                 {
-                    pass.setPipeline(this.normalObjects.bvhDrawPipeline);
-                    pass.setBindGroup(0, this.normalObjects.bindGroup);
-                    for (let i = 0; i < this.normalObjects.bvhLineGeometryBuffers.length; i++)
+                    pass.setPipeline(this.NO.bvhDrawPipeline);
+                    pass.setBindGroup(0, this.NO.bindGroup);
+                    for (let i = 0; i < this.NO.bvhLineGeometryBuffers.length; i++)
                     {
-                        pass.setBindGroup(1, this.normalObjects.materialBindGroups[i]);
-                        pass.setVertexBuffer(0, this.normalObjects.bvhLineGeometryBuffers[i]);
-                        pass.draw(this.normalObjects.bvhLineCounts[i]);
+                        pass.setBindGroup(1, this.NO.materialBindGroups[i]);
+                        pass.setVertexBuffer(0, this.NO.bvhLineGeometryBuffers[i]);
+                        pass.draw(this.NO.bvhLineCounts[i]);
                     }
                 }
 
                 // FastBVH (GPU-built) Wireframe Rendering
                 if (this.showFastBVH && this.fastBVHWireframeBindGroup)
                 {
-                    pass.setPipeline(this.normalObjects.bvhDrawPipeline);
-                    pass.setBindGroup(0, this.normalObjects.bindGroup);
+                    pass.setPipeline(this.NO.bvhDrawPipeline);
+                    pass.setBindGroup(0, this.NO.bindGroup);
                     pass.setBindGroup(1, this.fastBVHWireframeBindGroup);
                     pass.setVertexBuffer(0, this.fastBVH.wireframeVertexBuffer);
                     pass.draw(this.fastBVH.wireframeVertexCount);
@@ -2109,6 +2111,9 @@ class RayTracer
                 this.infoElement.textContent = content;
             }
 
+            if (1000/dt <= 300) 
+                addProfilerFrameTime(1000/dt);
+
             this.animationFrameId = requestAnimationFrame(render);
         }
         this.animationFrameId = requestAnimationFrame(render);
@@ -2127,9 +2132,9 @@ class RayTracer
                     setCameraAspect(this.camera, this.canvas.width / this.canvas.height);
                     
                     // Recreate depth texture with new size
-                    if (this.normalObjects.depthTexture) {
-                        this.normalObjects.depthTexture.destroy();
-                        this.normalObjects.depthTexture = this.device.createTexture({
+                    if (this.NO.depthTexture) {
+                        this.NO.depthTexture.destroy();
+                        this.NO.depthTexture = this.device.createTexture({
                             size: [this.canvas.width, this.canvas.height],
                             format: "depth24plus",
                             usage: GPUTextureUsage.RENDER_ATTACHMENT,
@@ -2183,41 +2188,41 @@ class RayTracer
         if (meshIndex < 0 || meshIndex >= (this.meshesInfo?.meshIndices.length || 0)) return;
 
         const matName: string = newMaterial.name;
-        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName);
+        const totalMaterialIndex = this.NO.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName);
         if (totalMaterialIndex === -1) return;
 
         this.meshesInfo!.meshMaterials[meshIndex] = newMaterial;
-        this.normalObjects.sceneInformation.meshes[totalMaterialIndex].Material = newMaterial;
+        this.NO.sceneInformation.meshes[totalMaterialIndex].Material = newMaterial;
 
         const materialBufferIndex = this.meshesInfo!.meshIndices[meshIndex];
         const materialData = flattenMaterial(newMaterial);
         
         // NORMAL
-        let buffer = this.normalObjects.materialUniforms[materialBufferIndex];
+        let buffer = this.NO.materialUniforms[materialBufferIndex];
         this.device!.queue.writeBuffer(buffer, 0, materialData as BufferSource);
 
         // RAY TRACING
         const offset = materialBufferIndex * MATERIAL_SIZE * 4;
-        this.device!.queue.writeBuffer(this.rayTracerObjects.materialBuffer, offset, materialData as BufferSource);
+        this.device!.queue.writeBuffer(this.RO.materialBuffer, offset, materialData as BufferSource);
     }
 
     //================================//
     recreateBindGroup(material: Material)
     {
         const matName: string = material.name;
-        const totalMaterialIndex = this.normalObjects.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName);
+        const totalMaterialIndex = this.NO.sceneInformation.meshes.findIndex(mesh => mesh.Material.name === matName);
         if (totalMaterialIndex === -1) return;
 
         const newBindGroup = this.device!.createBindGroup({
             label: 'Material Bind Group ' + totalMaterialIndex,
-            layout: this.normalObjects.materialUniformBindGroupLayout,
+            layout: this.NO.materialUniformBindGroupLayout,
             entries: [{
                 binding: 0,
-                resource: { buffer: this.normalObjects.materialUniforms[totalMaterialIndex] },
+                resource: { buffer: this.NO.materialUniforms[totalMaterialIndex] },
             },
             {
                 binding: 1,
-                resource: this.normalObjects.sampler,
+                resource: this.NO.sampler,
             },
             {
                 binding: 2,
@@ -2237,15 +2242,15 @@ class RayTracer
             },
             {
                     binding: 6,
-                    resource: { buffer: this.normalObjects.meshesModelMatrixBuffers[totalMaterialIndex] },
+                    resource: { buffer: this.NO.meshesModelMatrixBuffers[totalMaterialIndex] },
             },
             {
                     binding: 7,
-                    resource: { buffer: this.normalObjects.meshesNormalMatrixBuffers[totalMaterialIndex] },
+                    resource: { buffer: this.NO.meshesNormalMatrixBuffers[totalMaterialIndex] },
             }],
         });
 
-        this.normalObjects.materialBindGroups[totalMaterialIndex] = newBindGroup;
+        this.NO.materialBindGroups[totalMaterialIndex] = newBindGroup;
 
         // For the raytrace pipeline, write the texture into the array at the correct index
         var index = material.textureIndex;
@@ -2263,7 +2268,7 @@ class RayTracer
 
             this.device!.queue.copyExternalImageToTexture(
                 { source: image },
-                { texture: this.rayTracerObjects.textureArray, origin: [0, 0, index * 4 + typeIndex] },
+                { texture: this.RO.textureArray, origin: [0, 0, index * 4 + typeIndex] },
                 [1024, 1024]
             );
         }
@@ -2272,15 +2277,15 @@ class RayTracer
     //================================//
     getBVHGeometry(desiredDepth: number): Float32Array[]
     {
-        if (this.normalObjects.sceneInformation.meshes.length === 0) return [];
+        if (this.NO.sceneInformation.meshes.length === 0) return [];
 
-        this.normalObjects.bvhLineCounts = [];
+        this.NO.bvhLineCounts = [];
         const chunks: Float32Array[] = [];
-        for (let matNum = 0; matNum < this.normalObjects.sceneInformation.meshes.length; matNum++)
+        for (let matNum = 0; matNum < this.NO.sceneInformation.meshes.length; matNum++)
         {
-            const { vertexData, count } = this.normalObjects.sceneInformation.meshes[matNum].GetBVHGeometry(desiredDepth);
+            const { vertexData, count } = this.NO.sceneInformation.meshes[matNum].GetBVHGeometry(desiredDepth);
             chunks.push(vertexData);
-            this.normalObjects.bvhLineCounts.push(count);
+            this.NO.bvhLineCounts.push(count);
         }
         return chunks;
     }
@@ -2294,12 +2299,12 @@ class RayTracer
         
         for (let i = 0; i < lineData.length; i++)
         {
-            this.normalObjects.bvhLineGeometryBuffers[i] = this.device.createBuffer({
+            this.NO.bvhLineGeometryBuffers[i] = this.device.createBuffer({
                 label: `BVH Line Geometry Buffer ${i}`,
                 size: lineData[i].byteLength,
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
             });
-            this.device.queue.writeBuffer(this.normalObjects.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
+            this.device.queue.writeBuffer(this.NO.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
         }
     }
 
@@ -2309,7 +2314,7 @@ class RayTracer
         if (this.canvas === null || this.camera === null || this.meshesInfo === null) return -1;
 
         const potentialMeshesIndices: number[] = this.meshesInfo!.meshIndices;
-        const potentialMeshes = potentialMeshesIndices.map(index => this.normalObjects.sceneInformation.meshes[index]);
+        const potentialMeshes = potentialMeshesIndices.map(index => this.NO.sceneInformation.meshes[index]);
 
         // Convert viewport coordinates to canvas-relative coordinates
         const rect = this.canvas.getBoundingClientRect();

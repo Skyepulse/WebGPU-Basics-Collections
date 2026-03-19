@@ -1,0 +1,79 @@
+<template>
+  <div class="flex flex-row items-stretch h-20 font-mono text-[10px] select-none text-[#aaa]">
+
+    <!-- chart -->
+    <div class="flex-1 overflow-hidden relative bg-[#1a1a1a] rounded-sm">
+      <div
+        class="absolute left-0 bottom-0 top-0 flex flex-row items-end gap-px px-px box-border"
+        :style="{ width: (frames.length / props.maxBars) * 100 + '%' }"
+      >
+        <div
+          v-for="frame in frames"
+          :key="frame.id"
+          class="flex-1 min-w-0 bg-[#4a9eff] rounded-t-[1px]"
+          :title="`${frame.duration.toFixed(1)}ms`"
+          :style="{ height: barHeightPct(frame.duration) + '%' }"
+        >
+        </div>
+      </div>
+    </div>
+
+    <!-- scale -->
+    <div class="w-[30px] relative shrink-0 ml-[3px]">
+      <div class="absolute left-0 top-0 bottom-0 w-px bg-[#555]"></div>
+      <span class="absolute left-1 top-0 leading-none whitespace-nowrap">{{ scaleMax }}</span>
+      <span class="absolute left-1 top-1/2 -translate-y-1/2 leading-none whitespace-nowrap">{{ scaleMid }}</span>
+      <span class="absolute left-1 bottom-0 leading-none whitespace-nowrap">0</span>
+    </div>
+  </div>
+  
+</template>
+
+<script setup lang="ts">
+    import { ref, computed } from 'vue';
+
+    //================================//
+    interface FrameEntry
+    {
+        id: number,
+        duration: number
+    }
+
+    //================================//
+    const props = withDefaults(defineProps<{
+            maxBars?: number
+        }>(),
+        {
+            maxBars: 60
+    });
+
+    //================================//
+    let nextId = 0;
+    const frames = ref<FrameEntry[]>([]);
+    const dynamicMax = ref(60);
+
+    //================================//
+    const scaleMax = computed(() => dynamicMax.value);
+    const scaleMid = computed(() => Math.round(dynamicMax.value / 2));
+
+    //================================//
+    function barHeightPct(duration: number): number
+    {
+        return Math.min((duration / dynamicMax.value) * 100, 100);
+    }
+
+    //================================//
+    function addFrame(duration: number)
+    {
+        if (duration > dynamicMax.value)
+            dynamicMax.value = Math.max(60, Math.ceil(duration / 10) * 10);
+
+        if (frames.value.length >= props.maxBars)
+            frames.value.shift();
+
+        frames.value.push({ id: nextId++, duration });
+    }
+
+    // API CALL POINT
+    defineExpose({ addFrame });
+</script>

@@ -1,10 +1,10 @@
 <style scoped>
-#indexingContainer {
-  direction: rtl;
-}
-#indexingContainer > button {
-  direction: ltr;
-}
+    #indexingContainer {
+    direction: rtl;
+    }
+    #indexingContainer > button {
+    direction: ltr;
+    }
 </style>
 
 <template>
@@ -28,7 +28,10 @@
             </button>
         </div>
         <canvas id="webgpuCanvas" ref="webgpuCanvas" class="w-[90%] h-full"></canvas>
+
+        <!-- Absolute info, utils and profiler -->
         <pre id="info" class="absolute top-0 right-0 p-4"></pre>
+        <Profiler id="profiler" class="absolute top-2 left-[calc(10%+0.5rem)] w-48" ref="profiler" :maxBars="60" />
         <div id="utils-wrapper" class="absolute bottom-0 right-0 flex flex-col items-end">
             <!-- Toggle the utils -->
              <button
@@ -59,8 +62,9 @@
 </template>
 
 <script setup lang="ts">
-    import { onMounted, ref, computed } from 'vue';
-    import { addUtilElementDefaults } from './helpers/Others';
+    import { onMounted, ref, computed, nextTick } from 'vue';
+    import { addUtilElementDefaults, setProfilerInstance } from './helpers/Others';
+    import Profiler from './components/profiler.vue';
 
     import { startup_1 } from './1-BasicStart/main';
     import { startup_2 } from './2-ComputeBasics/main';
@@ -78,6 +82,7 @@
     import { startup_14 } from './14-FastBVH/main';
 
     const webgpuCanvas = ref<HTMLCanvasElement | null>(null);
+    const profiler = ref<{ addFrame: (d: number) => void } | null>(null);
     const currentRenderer = ref<any>(null);
     const isSwitching = ref(false);
 
@@ -158,8 +163,10 @@
     }
 
     //================================//
-    onMounted(() => {
+    onMounted(async () => {
         addUtilElementDefaults();
+        await nextTick();
+        if (profiler.value) setProfilerInstance(profiler.value);
         selectExample(14);
     });
 </script>

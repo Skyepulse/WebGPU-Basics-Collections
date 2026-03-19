@@ -1,9 +1,8 @@
 import { type Material } from "@src/helpers/MaterialUtils";
 import * as glm from "gl-matrix";
 import { degreesToRads, radsToDegrees } from "./MathUtils";
-
 //================================//
-export function getInfoElement(): HTMLElement | null 
+export function getInfoElement(): HTMLElement | null
 {
     return document.getElementById("info");
 }
@@ -12,6 +11,22 @@ export function getInfoElement(): HTMLElement | null
 export function getUtilElement(): HTMLElement | null
 {
     return document.getElementById("utils");
+}
+
+//================================//
+type ProfilerInstance = { addFrame: (duration: number) => void };
+let profiler: ProfilerInstance | null = null;
+
+//================================//
+export function setProfilerInstance(instance: ProfilerInstance): void
+{
+    profiler = instance;
+}
+
+//================================//
+export function addProfilerFrameTime(time: number): void
+{
+    profiler?.addFrame(time);
 }
 
 //================================//

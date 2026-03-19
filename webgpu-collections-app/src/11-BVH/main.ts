@@ -14,7 +14,7 @@ import bvhFragWGSL from './bvh_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { addButton, addCheckbox, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type SpotLight } from '@src/helpers/Others';
+import { addButton, addCheckbox, addSlider, cleanUtilElement, createLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, addProfilerFrameTime, type SpotLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay } from '@src/helpers/CameraHelpers';
 import { createCornellBox3, type Ray, type SceneInformation } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
@@ -1220,6 +1220,11 @@ class RayTracer
                 JS Time: ${jsTime.toFixed(1)} ms
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
                 `
+
+                // Add frame time info
+                if (1000/dt <= 300) 
+                    addProfilerFrameTime(1000/dt);
+
                 this.infoElement.textContent = content;
             }
 

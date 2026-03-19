@@ -169,7 +169,7 @@ class FastParallelBVH
         this.dispatchRadixSort(commandEncoder);
         this.dispatchPatriciaTreePass(commandEncoder);
         this.dispatchAABBPass(commandEncoder);
-        this.dispatchWireframePass(commandEncoder);
+        //this.dispatchWireframePass(commandEncoder);
     }
 
     //================================//
@@ -870,7 +870,7 @@ class RayTracer
     private useRaytracing: boolean = true;
     private rayTracerMode: RayTracerMode = RayTracerMode.raytrace;
     private numBounces: number = 3;
-    private numSpheres: number = 100;
+    private numSpheres: number = 50;
     private meshesInfo: any;
     private activeContextMenu: HTMLDivElement | null = null;
     private seed = 0;
@@ -980,7 +980,7 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
         addNumberInput('Random Seed', this.seed, 0, 10<<20, 1, utilElement, (value) => { this.seed = value; this.initializeBuffers(); });
         utilElement.appendChild(document.createElement('br'));
-        addSlider('Number of Spheres', this.numSpheres, 1, 200, 1, utilElement, (value) => { this.numSpheres = value; this.initializeBuffers(); });
+        addSlider('Number of Spheres', this.numSpheres, 1, 99, 1, utilElement, (value) => { this.numSpheres = value; this.initializeBuffers(); });
     }
 
     //================================//
@@ -1263,7 +1263,7 @@ class RayTracer
             });
         }
 
-        this.timestampQuerySet = CreateTimestampQuerySet(this.device, 2);
+        this.timestampQuerySet = CreateTimestampQuerySet(this.device, 4);
 
         // Samplers
         this.NO.sampler = this.device.createSampler({
@@ -1963,6 +1963,7 @@ class RayTracer
         let then = 0;
         let totalTime = 0;
         let gpuTime = 0;
+        let gpuComputeTime = 0;
 
         // RENDER LOOP
         const render = (now: number) =>
@@ -2006,7 +2007,7 @@ class RayTracer
             const encoder = this.device.createCommandEncoder({label: 'Render Quad Encoder'});
 
             this.fastBVH.clearAtomicCounters(encoder);
-            const computePass = encoder.beginComputePass({ label: 'Fast parallel BVH Compute Pass' });
+            const computePass = encoder.beginComputePass({ label: 'Fast parallel BVH Compute Pass', ...(this.timestampQuerySet != null && { timestampWrites: { querySet: this.timestampQuerySet.querySet, beginningOfPassWriteIndex: 2, endOfPassWriteIndex: 3 } }) });
             this.fastBVH.dispatch(computePass);
             computePass.end();
 
@@ -2093,6 +2094,7 @@ class RayTracer
                 {
                     const times = new BigUint64Array(this.timestampQuerySet!.resultBuffer.getMappedRange());
                     gpuTime = Number(times[1] - times[0]);
+                    gpuComputeTime = Number(times[3] - times[2]);
                     this.timestampQuerySet!.resultBuffer.unmap();
                 });
             }
@@ -2104,15 +2106,14 @@ class RayTracer
                 `\
                 FPS: ${(1000/dt).toFixed(1)}
                 JS Time: ${jsTime.toFixed(1)} ms
-                GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
+                RGPU: ${(gpuTime/1e6).toFixed(2)} ms
+                CGPU: ${(gpuComputeTime/1e6).toFixed(2)} ms
                 Num Triangles: ${this.fastBVH.numTriangles}
                 ${this.fastBVH.debug ? this.minMaxBoundsText : ''}
                 `
                 this.infoElement.textContent = content;
             }
-
-            if (1000/dt <= 300) 
-                addProfilerFrameTime(1000/dt);
+            addProfilerFrameTime(1000/dt);
 
             this.animationFrameId = requestAnimationFrame(render);
         }

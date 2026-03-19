@@ -1220,12 +1220,9 @@ class RayTracer
                 JS Time: ${jsTime.toFixed(1)} ms
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
                 `
-
-                // Add frame time info
-                if (1000/dt <= 300) 
-                    addProfilerFrameTime(1000/dt);
-
                 this.infoElement.textContent = content;
+
+                addProfilerFrameTime(1000/dt);
             }
 
             this.animationFrameId = requestAnimationFrame(render);

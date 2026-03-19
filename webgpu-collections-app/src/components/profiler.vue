@@ -2,7 +2,7 @@
   <div class="flex flex-row items-stretch h-20 font-mono text-[10px] select-none text-[#aaa]">
 
     <!-- chart -->
-    <div class="flex-1 overflow-hidden relative bg-[#1a1a1a] rounded-sm">
+    <div class="flex-1 overflow-hidden relative bg-[#1a1a1a]/20 rounded-sm">
       <div
         class="absolute left-0 bottom-0 top-0 flex flex-row items-end gap-px px-px box-border"
         :style="{ width: (frames.length / props.maxBars) * 100 + '%' }"
@@ -10,9 +10,9 @@
         <div
           v-for="frame in frames"
           :key="frame.id"
-          class="flex-1 min-w-0 bg-[#4a9eff] rounded-t-[1px]"
+          class="flex-1 min-w-0 rounded-t-[1px]"
           :title="`${frame.duration.toFixed(1)}ms`"
-          :style="{ height: barHeightPct(frame.duration) + '%' }"
+          :style="{ height: barHeightPct(frame.duration) + '%', backgroundColor: barColor(frame.duration) }"
         >
         </div>
       </div>
@@ -63,15 +63,22 @@
     }
 
     //================================//
+    function barColor(duration: number): string
+    {
+        const t = Math.min(duration / 60, 1);
+        const r = Math.round(255 * (1 - t));
+        const g = Math.round(255 * t);
+        return `rgb(${r},${g},0)`;
+    }
+
+    //================================//
     function addFrame(duration: number)
     {
-        if (duration > dynamicMax.value)
-            dynamicMax.value = Math.max(60, Math.ceil(duration / 10) * 10);
 
         if (frames.value.length >= props.maxBars)
             frames.value.shift();
 
-        frames.value.push({ id: nextId++, duration });
+        frames.value.push({ id: nextId++, duration: Math.min(Math.max(duration, 0), 60)});
     }
 
     // API CALL POINT

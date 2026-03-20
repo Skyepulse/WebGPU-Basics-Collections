@@ -319,8 +319,6 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
 {
     let numInstances = arrayLength(&meshInstances);
     var hitCount: u32 = 0u;
-    var leafTriCount: u32 = 0u;
-    var deepestHit: u32 = 0u;
 
     for (var j: u32 = 0u; j < numInstances; j++)
     {
@@ -329,61 +327,42 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
         var localRay: Ray;
         localRay.origin = (inst.inverseWorldMatrix * vec4f(ray.origin, 1.0)).xyz;
         localRay.direction = (inst.inverseWorldMatrix * vec4f(ray.direction, 0.0)).xyz;
-
         let invDir = vec3f(1.0 / localRay.direction.x, 1.0 / localRay.direction.y, 1.0 / localRay.direction.z);
 
-        var stackNode: array<u32, 64>;
-        var stackDepth: array<u32, 64>;
-        var stackPtr: i32 = 0;
-        stackNode[0] = inst.bvhRootIndex;
-        stackDepth[0] = 0u;
-        stackPtr = 1;
+        let endIndex = inst.bvhRootIndex + inst.numBvhNodes;
+        var index = inst.bvhRootIndex;
+        var depth: u32 = 0u;
 
-        while (stackPtr > 0)
+        var returnTarget: array<u32, 32>;
+
+        while (index < endIndex)
         {
-            stackPtr -= 1;
-            let nodeIndex = stackNode[stackPtr];
-            let depth = stackDepth[stackPtr];
-            let node = bvhNodes[nodeIndex];
+            let node = bvhNodes[index];
+            let isLeaf = node.count > 0u;
 
             if (!rayAABBIntersect(localRay, invDir, node.minB, node.maxB, 1e30))
             {
+                if (isLeaf) { index++; } else { index = node.leftOrFirst; }
+                while (depth > 0u && index >= returnTarget[depth - 1u]) { depth--; }
                 continue;
             }
 
-            if (depth > deepestHit) { deepestHit = depth; }
-
-            if (depth == targetDepth)
+            if (depth == targetDepth || isLeaf)
             {
                 hitCount += 1u;
+                if (isLeaf) { index++; } else { index = node.leftOrFirst; }
+                while (depth > 0u && index >= returnTarget[depth - 1u]) { depth--; }
                 continue;
             }
 
-            if (node.count > 0u)
-            {
-                hitCount += 1u;
-                leafTriCount += node.count;
-                continue;
-            }
-
-            // In DFS pre-order layout: left child is always nodeIndex + 1.
-            // Right child: if left is a leaf it occupies 1 slot so right = leftIdx + 1.
-            // If left is internal, its missLink (leftOrFirst) points past its subtree = right child.
-            let leftIdx = nodeIndex + 1u;
-            let leftChild = bvhNodes[leftIdx];
-            let rightIdx = select(leftChild.leftOrFirst, leftIdx + 1u, leftChild.count > 0u);
-            stackNode[stackPtr] = rightIdx;
-            stackDepth[stackPtr] = depth + 1u;
-            stackPtr += 1;
-            stackNode[stackPtr] = leftIdx;
-            stackDepth[stackPtr] = depth + 1u;
-            stackPtr += 1;
+            returnTarget[depth] = node.leftOrFirst;
+            depth++;
+            index++;
         }
     }
 
     if (hitCount == 0u) { return vec3f(0.0); }
 
-    // Heatmap: blue (1 hit) → green (few) → yellow → red (many)
     let t = clamp(f32(hitCount) / 8.0, 0.0, 1.0);
     if (t < 0.5)
     {

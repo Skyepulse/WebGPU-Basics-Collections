@@ -4,6 +4,11 @@
 // the second computes the AABB of the union of the children boxes.
 // From Karras 2012: https://research.nvidia.com/sites/default/files/publications/karras2012hpg_paper.pdf
 
+// We also store the initial values for the number of triangles in each subtree,
+// and the sahCost as described in Karras 2013: "In practice, we initialize N(n) and C(n) 
+// during the AABB fitting step of the initial BVH construction and keep them up to date throughout 
+// the optimization."
+
 //================================//
 override THREADS_PER_WORKGROUP: u32;
 override INTERNAL_NODE_COUNT: u32;
@@ -20,11 +25,12 @@ struct BVHNode
 
     left:    u32,
     right:   u32,
-    _pad0: u32,
+    sahCost: f32,
     _pad1: u32,
 }; // Size 48
 
-struct LeafAABB {
+struct LeafAABB 
+{
     aabbMin: vec3f,
     _pad0: u32,
     aabbMax: vec3f,
@@ -89,9 +95,22 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
         let mergedMin: vec3f = min(leftChildAABB.aabbMin, rightChildAABB.aabbMin);
         let mergedMax: vec3f = max(leftChildAABB.aabbMax, rightChildAABB.aabbMax);
 
+        let tricount = getChildTriangleCount(leftChildIndex) + getChildTriangleCount(rightChildIndex);
+
         internalNodes[parentNode].aabbMin = mergedMin;
         internalNodes[parentNode].aabbMax = mergedMax;
-        internalNodes[parentNode].triangleCount = getChildTriangleCount(leftChildIndex) + getChildTriangleCount(rightChildIndex);
+        internalNodes[parentNode].triangleCount = tricount;
+
+        let leftChildSAHCost = getChildSAHCost(leftChildIndex);
+        let rightChildSAHCost = getChildSAHCost(rightChildIndex);
+
+        let area = surfaceArea(mergedMin, mergedMax);
+
+        // Equation (2) in Karras 2013:
+        // Ci is set to 1.2, Ct is set to 1.0.
+        let internalCost = 1.2 * area + leftChildSAHCost + rightChildSAHCost;
+        let collapseCost = 1.0 * area * f32(tricount);
+        internalNodes[parentNode].sahCost = min(internalCost, collapseCost);
 
         parentNode = internalNodes[parentNode].parent;
     }
@@ -121,5 +140,26 @@ fn getChildTriangleCount(childIndex: u32) -> u32
     else
     {
         return internalNodes[childIndex].triangleCount;
+    }
+}
+
+//================================//
+fn surfaceArea(aabbMin: vec3f, aabbMax: vec3f) -> f32
+{
+    let d = aabbMax - aabbMin;
+    return 2.0 * (d.x * d.y + d.y * d.z + d.z * d.x);
+}
+
+//================================//
+fn getChildSAHCost(childIndex: u32) -> f32
+{
+    if ((childIndex & LEAF_BIT) != 0u)
+    {
+        let index = childIndex & 0x7FFFFFFFu;
+        return surfaceArea(leafAABBs[index].aabbMin, leafAABBs[index].aabbMax);
+    }
+    else
+    {
+        return internalNodes[childIndex].sahCost;
     }
 }

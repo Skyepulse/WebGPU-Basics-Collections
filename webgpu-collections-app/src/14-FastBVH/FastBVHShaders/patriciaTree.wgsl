@@ -64,7 +64,7 @@ struct BVHNode
     aabbMin: vec3f,
     parent:  u32,
     aabbMax: vec3f,
-    padding: u32,
+    triangleCount: u32,
 
     left:    u32,
     right:   u32,

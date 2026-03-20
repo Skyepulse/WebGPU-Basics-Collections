@@ -16,7 +16,7 @@ struct BVHNode
     aabbMin: vec3f,
     parent:  u32,
     aabbMax: vec3f,
-    padding: u32,
+    triangleCount: u32,
 
     left:    u32,
     right:   u32,
@@ -65,7 +65,6 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
     leafAABBs[leafIndex].aabbMax = max(v0, max(v1, v2));
 
     // climb up the tree
-
     var parentNode = leafParents[leafIndex];
 
     loop {
@@ -92,6 +91,7 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
 
         internalNodes[parentNode].aabbMin = mergedMin;
         internalNodes[parentNode].aabbMax = mergedMax;
+        internalNodes[parentNode].triangleCount = getChildTriangleCount(leftChildIndex) + getChildTriangleCount(rightChildIndex);
 
         parentNode = internalNodes[parentNode].parent;
     }
@@ -108,5 +108,18 @@ fn getChildAABB(childIndex: u32) -> LeafAABB
     else
     {
         return LeafAABB(internalNodes[childIndex].aabbMin, 0u, internalNodes[childIndex].aabbMax, 0u);
+    }
+}
+
+//================================//
+fn getChildTriangleCount(childIndex: u32) -> u32
+{
+    if ((childIndex & LEAF_BIT) != 0u)
+    {
+        return 1u;
+    }
+    else
+    {
+        return internalNodes[childIndex].triangleCount;
     }
 }

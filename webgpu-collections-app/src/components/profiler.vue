@@ -4,7 +4,7 @@
     <!-- chart -->
     <div class="flex-1 overflow-hidden relative bg-[#1a1a1a]/20 rounded-sm">
       <div
-        class="absolute left-0 bottom-0 top-0 flex flex-row items-end gap-px px-px box-border"
+        class="absolute left-0 bottom-0 top-0 flex flex-row items-end"
         :style="{ width: (frames.length / props.maxBars) * 100 + '%' }"
       >
         <div

@@ -17,7 +17,7 @@ import displayFragWGSL from './display_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { addButton, addCheckbox, addSlider, cleanUtilElement, createAreaLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type AreaLight } from '@src/helpers/Others';
+import { addButton, addCheckbox, addProfilerFrameTime, addSlider, cleanUtilElement, createAreaLightContextMenu, createMaterialContextMenu, getInfoElement, getUtilElement, type AreaLight } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy, cameraPointToRay } from '@src/helpers/CameraHelpers';
 import { createCornellBox4, type Ray, type SceneInformation } from '@src/helpers/GeometryUtils';
 import { createPlaceholderImage, createPlaceholderTexture, createTextureFromImage, loadImageFromUrl, resizeImage, TextureType } from '@src/helpers/ImageHelpers';
@@ -1328,6 +1328,8 @@ class RayTracer
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
                 `
                 this.infoElement.textContent = content;
+
+                addProfilerFrameTime(1000/dt);
             }
             this.animationFrameId = requestAnimationFrame(render);
         }

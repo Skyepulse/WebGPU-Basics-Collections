@@ -5,7 +5,7 @@ import simpleTextureFragWGSL from './simpleTexture_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { addProfilerFrameTime, cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createQuadVertices, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import {mat4} from 'wgpu-matrix';
 import { rand } from '@src/helpers/MathUtils';
@@ -448,6 +448,8 @@ class TextureExampleRenderer
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
                 `
                 this.infoElement.textContent = content;
+
+                addProfilerFrameTime(1000/dt);
             }
 
             this.animationFrameId = requestAnimationFrame(render);

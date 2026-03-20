@@ -11,6 +11,7 @@ import GameRenderer from "./GameRenderer";
 import RigidBox from "./RigidBox";
 import Solver from "./Solver";
 import { rand, randomPosInRectRot, randomColorUint8 } from "@src/helpers/MathUtils";
+import { addProfilerFrameTime } from '@src/helpers/Others';
 
 //================================//
 class GameManager
@@ -131,6 +132,8 @@ class GameManager
             this.gameRenderer.render();
 
             this.rafID = requestAnimationFrame(frame);
+
+            addProfilerFrameTime(1000/dt);
         };
 
         this.rafID = requestAnimationFrame(frame);

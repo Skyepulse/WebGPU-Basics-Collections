@@ -8,7 +8,7 @@ import normalFragWgsl from './normal_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule } from '@src/helpers/WebGPUutils';
 import type { PipelineResources, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { addProfilerFrameTime, cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createCamera, moveCameraLocal, rotateCameraByMouse, setCameraPosition, setCameraNearFar, setCameraAspect, computePixelToRayMatrix, rotateCameraBy } from '@src/helpers/CameraHelpers';
 import { createCornellBox, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import { rotationMatrix3 } from '@src/helpers/MathUtils';
@@ -861,6 +861,8 @@ class RayTracer
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
                 `
                 this.infoElement.textContent = content;
+
+                addProfilerFrameTime(1000/dt);
             }
 
             this.animationFrameId = requestAnimationFrame(render);

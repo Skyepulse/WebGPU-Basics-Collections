@@ -5,7 +5,7 @@ import FragWGSL from './shader_frag.wgsl?raw';
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, mergeFloat32Arrays, mergeUint16Arrays } from '@src/helpers/WebGPUutils';
 import type { ShaderModule, TimestampQuerySet } from '@src/helpers/WebGPUutils';
-import { cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
+import { addProfilerFrameTime, cleanUtilElement, getInfoElement, getUtilElement } from '@src/helpers/Others';
 import { createQuad, createSphere, type TopologyInformation } from '@src/helpers/GeometryUtils';
 import { createCamera, moveCameraLocal, rotateCameraBy, rotateCameraByMouse, setCameraAspect, setCameraNearFar, setCameraPosition } from '@src/helpers/CameraHelpers';
 import * as glm from 'gl-matrix';
@@ -825,6 +825,8 @@ class TransparencyRenderer
                 GPU Time: ${(gpuTime/1e6).toFixed(2)} ms
                 `
                 this.infoElement.textContent = content;
+
+                addProfilerFrameTime(1000/dt);
             }
 
             this.animationFrameId = requestAnimationFrame(render);

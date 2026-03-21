@@ -151,6 +151,10 @@ var<workgroup> nodeLeft:        array<u32, 13>;
 var<workgroup> nodeRight:       array<u32, 13>;
 var<workgroup> nodeSA:          array<f32, 13>;
 
+// I had an error on not all threads hitting all workGroupBarriers.
+// So this shared variable is set as a flag.
+var<workgroup> shouldWriteBack: u32;
+
 //================================//
 @compute
 @workgroup_size(32)
@@ -406,13 +410,22 @@ fn cs(
     // [7] Now that we have the optimal partitioning
     // We just need to reconstruct it
 
-    let newRootCost = a_copt[127u - 1u];
-    if (newRootCost >= nodeCost[0])
+    if (isFirstThread) // Replaced early return with flag.
     {
-        return; // Cannot improve if new cost is superior to old cost.
+        if (a_copt[126u] < nodeCost[0])
+        {
+            shouldWriteBack = 1u;
+        }
+        else // No improvement to the treelet, let it as is.
+        {
+            shouldWriteBack = 0u;
+        }
     }
+    workgroupBarrier();
 
-    if (isFirstThread)
+    let shouldWeWriteBack = shouldWriteBack == 1u;
+
+    if (isFirstThread && shouldWeWriteBack)
     {
         // sequential reconstruction
         var originalInternalNodes: array<u32, 6>;
@@ -494,7 +507,7 @@ fn cs(
 
     // [8] Write back to global memory
     // 6 internal nodes == 6 threads.
-    if (l_id.x < 6u)
+    if (l_id.x < 6u && shouldWeWriteBack)
     {
         let slot = l_id.x;
         let bvhIndex = nodeIndex[slot];
@@ -507,7 +520,7 @@ fn cs(
     }
     workgroupBarrier();
 
-    if (l_id.x < 6u)
+    if (l_id.x < 6u && shouldWeWriteBack)
     {
         let slot = l_id.x;
         let parentBVHIndex = nodeIndex[slot];

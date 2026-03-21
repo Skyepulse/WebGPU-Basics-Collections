@@ -968,7 +968,7 @@ class RayTracer
     private useRaytracing: boolean = true;
     private rayTracerMode: RayTracerMode = RayTracerMode.raytrace;
     private numBounces: number = 3;
-    private numSpheres: number = 50;
+    private numSpheres: number = 1;
     private meshesInfo: any;
     private activeContextMenu: HTMLDivElement | null = null;
     private seed = 0;
@@ -2075,7 +2075,7 @@ class RayTracer
             this.fastBVH.dispatch(computePass);
             computePass.end();
 
-            for (let i = 0; i < 3; i++)
+            for (let i = 0; i < 1; i++)
             {
                 this.fastBVH.clearAtomicCounters(encoder);
                 this.fastBVH.clearDispatchArgsBuffer(encoder);

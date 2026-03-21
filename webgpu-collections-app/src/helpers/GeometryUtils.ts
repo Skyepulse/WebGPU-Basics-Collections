@@ -272,6 +272,27 @@ export class Mesh
     }
 
     //================================//
+    public getWorldNormalData(): Float32Array
+    {
+        const float32View = new Float32Array(this.vertices.length * 3);
+        const normalMat = glm.mat3.create();
+
+        glm.mat3.normalFromMat4(normalMat, this.WorldMatrix);
+
+        for (let i = 0; i < this.vertices.length; ++i)
+        {
+            const normal: glm.vec3 = this.vertices[i].normal;
+            const transformedNormal = glm.vec3.create();
+
+            glm.vec3.transformMat3(transformedNormal, normal, normalMat);
+            glm.vec3.normalize(transformedNormal, transformedNormal);
+            float32View.set(transformedNormal, i * 3);
+        }
+
+        return float32View;
+    }
+
+    //================================//
     public getTransformedNormalData(): Float32Array
     {
         const float32View = new Float32Array(this.vertices.length * 3);
@@ -1909,16 +1930,28 @@ export async function fastBVHExampleScene(meshMaterials: Material[], seed: numbe
         mesh.ComputeBVH();
 
     const worldPositionData: number[] = [];
+    const worldNormalData: number[] = [];
     const perMeshWorldPositionOffsets: number[] = [];
+    const perTriangleMaterialIndices: number[] = [];
     let byteOffset = 0;
     for (let i = 0; i < Meshes.length; i++)
     {
         const worldVertices = Meshes[i].getWorldVertexData();
+        const worldNormals = Meshes[i].getWorldNormalData();
         worldPositionData.push(...worldVertices);
+        worldNormalData.push(...worldNormals);
         perMeshWorldPositionOffsets.push(byteOffset);
         byteOffset += Meshes[i].getNumVertices() * 3 * 4;
+
+        const numTriangles = Meshes[i].getNumTriangles();
+        const materialIndex = i;
+
+        for (let j = 0; j < numTriangles; j++)
+            perTriangleMaterialIndices.push(materialIndex);
     }
     const worldPositionFloat32Array = new Float32Array(worldPositionData);  
+    const worldNormalFloat32Array = new Float32Array(worldNormalData);  
+    const perTriangleMaterialIndicesUint32Array = new Uint32Array(perTriangleMaterialIndices);
 
     return {
         meshes: Meshes,
@@ -1927,6 +1960,8 @@ export async function fastBVHExampleScene(meshMaterials: Material[], seed: numbe
             meshTransforms: Meshes.map(m => m.GetTransform()),
             meshMaterials: Meshes.map(m => m.GetMaterial()),
             worldPositionData: worldPositionFloat32Array,
+            worldNormalData: worldNormalFloat32Array,
+            perTriangleMaterialIndices: perTriangleMaterialIndicesUint32Array,
             perMeshWorldPositionOffsets: perMeshWorldPositionOffsets
         }
     };

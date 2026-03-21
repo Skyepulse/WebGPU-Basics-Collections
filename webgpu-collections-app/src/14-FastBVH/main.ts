@@ -745,6 +745,12 @@ class FastParallelBVH
         commandEncoder.setBindGroup(0, this.dfsFlatteningBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
     }
+
+    //================================//
+    getFinalFlattenedBVHBuffer(): GPUBuffer
+    {
+        return this.dfsFlattenedNodesBuffer;
+    }
 }
 //============== END PAPER IMPLEMENTATION ==================//
 
@@ -824,6 +830,8 @@ interface RO extends PipelineResources
     // Utils for the FastBVH implementation
     worldPositionStorageBuffer: GPUBuffer;
     perMeshWorldPositionOffsets: number[];
+    worldNormalStorageBuffer: GPUBuffer;
+    perTriangleMaterialIndicesStorageBuffer: GPUBuffer;
 };
 
 //================================//
@@ -1020,12 +1028,12 @@ class RayTracer
                     buffer: { type: "uniform" },
                 },
                 {
-                    binding: 1, // positions
+                    binding: 1, // world vertices
                     visibility: GPUShaderStage.FRAGMENT,
                     buffer: { type: "read-only-storage" },
                 },
                 {
-                    binding: 2, // normals
+                    binding: 2, // world normals
                     visibility: GPUShaderStage.FRAGMENT,
                     buffer: { type: "read-only-storage" },
                 },
@@ -1045,7 +1053,7 @@ class RayTracer
                     buffer: { type: "read-only-storage" },
                 },
                 {
-                    binding: 6, // meshInstances
+                    binding: 6, // materialsPerTriangle
                     visibility: GPUShaderStage.FRAGMENT,
                     buffer: { type: "read-only-storage" },
                 }
@@ -1278,6 +1286,9 @@ class RayTracer
         this.NO.sceneInformation = info;
         this.meshesInfo = info.additionalInfo;
         const worldPositionData: Float32Array = this.meshesInfo.worldPositionData;
+        const worldNormalData: Float32Array = this.meshesInfo.worldNormalData;
+        const perTriangleMaterialIndices: Uint32Array = this.meshesInfo.perTriangleMaterialIndices;
+        
         this.RO.perMeshWorldPositionOffsets = this.meshesInfo.perMeshWorldPositionOffsets;
 
         const numMaterials = info.meshes.length;
@@ -1497,6 +1508,20 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.RO.worldPositionStorageBuffer, 0, worldPositionData as BufferSource);
 
+        this.RO.worldNormalStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer World Normal Storage Buffer',
+            size: worldNormalData.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.RO.worldNormalStorageBuffer, 0, worldNormalData as BufferSource);
+
+        this.RO.perTriangleMaterialIndicesStorageBuffer = this.device.createBuffer({
+            label: 'Ray Tracer Per-Triangle Material Indices Storage Buffer',
+            size: perTriangleMaterialIndices.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.RO.perTriangleMaterialIndicesStorageBuffer, 0, perTriangleMaterialIndices as BufferSource);
+
         this.RO.normalStorageBuffer = this.device.createBuffer({
             label: 'Ray Tracer Normal Storage Buffer',
             size: normalData.byteLength,
@@ -1532,6 +1557,15 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.RO.meshInstancesStorageBuffer, 0, meshInstancesData as BufferSource);
 
+        // FastBVH Pipeline
+        this.fastBVH.initializeMinMaxPipeline(this.device, this.RO.worldPositionStorageBuffer, worldPositionData.length / 3);
+        const numTriangles = indexData.length / 3;
+        this.fastBVH.initializeMortonPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer, numTriangles);
+        this.fastBVH.initializeRadixSortPipelines(this.device);
+        this.fastBVH.initializePatriciaTreePipeline(this.device);
+        this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
+        this.fastBVH.initializeDFSFlatteningPipeline(this.device);
+
         this.RO.bindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Bind Group',
             layout: this.RO.bindGroupLayout,
@@ -1541,11 +1575,11 @@ class RayTracer
                 },
                 {
                     binding: 1,
-                    resource: { buffer: this.RO.positionStorageBuffer },
+                    resource: { buffer: this.RO.worldPositionStorageBuffer },
                 },
                 {
                     binding: 2,
-                    resource: { buffer: this.RO.normalStorageBuffer },
+                    resource: { buffer: this.RO.worldNormalStorageBuffer },
                 },
                 {
                     binding: 3,
@@ -1557,23 +1591,14 @@ class RayTracer
                 },
                 {
                     binding: 5,
-                    resource: { buffer: this.RO.bvhNodesStorageBuffer },
+                    resource: { buffer: this.fastBVH.getFinalFlattenedBVHBuffer() },
                 },
                 {
                     binding: 6,
-                    resource: { buffer: this.RO.meshInstancesStorageBuffer },
+                    resource: { buffer: this.RO.perTriangleMaterialIndicesStorageBuffer },
                 }
             ],
         });
-
-        // FastBVH Pipeline
-        this.fastBVH.initializeMinMaxPipeline(this.device, this.RO.worldPositionStorageBuffer, worldPositionData.length / 3);
-        const numTriangles = indexData.length / 3;
-        this.fastBVH.initializeMortonPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer, numTriangles);
-        this.fastBVH.initializeRadixSortPipelines(this.device);
-        this.fastBVH.initializePatriciaTreePipeline(this.device);
-        this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
-        this.fastBVH.initializeDFSFlatteningPipeline(this.device);
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -1905,8 +1930,10 @@ class RayTracer
             this.device?.queue.writeBuffer(this.RO.meshInstancesStorageBuffer, meshIndex * meshInstanceSize, mesh.GetFlatInverseWorldMatrix() as BufferSource);
 
             const worldPositions = mesh.getWorldVertexData();
+            const worldNormals = mesh.getWorldNormalData();
             const meshOffset = this.RO.perMeshWorldPositionOffsets[meshIndex];
             this.device?.queue.writeBuffer(this.RO.worldPositionStorageBuffer, meshOffset, worldPositions as BufferSource);
+            this.device?.queue.writeBuffer(this.RO.worldNormalStorageBuffer, meshOffset, worldNormals as BufferSource);
         }
     }
 

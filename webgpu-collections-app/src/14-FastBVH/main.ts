@@ -20,8 +20,7 @@ import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
 import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
 import patriciaTreeWGSL from './FastBVHShaders/patriciaTree.wgsl?raw';
 import AABBWGSL from './FastBVHShaders/AABB.wgsl?raw';
-import findTreeletWGSL from './FastBVHShaders/findTreeletRoots.wgsl?raw';
-import teeletOptWGSL from './FastBVHShaders/treeletOptimization.wgsl?raw';
+// import teeletOptWGSL from './FastBVHShaders/treeletOptimization.wgsl?raw';
 
 //================================//
 import { RequestWebGPUDevice, CreateShaderModule, CreateTimestampQuerySet } from '@src/helpers/WebGPUutils';
@@ -145,39 +144,6 @@ class FastParallelBVH
     private aabbIndexBuffer!: GPUBuffer;
     private aabbSortedIndexBuffer!: GPUBuffer;
     private leafAABBsBuffer!: GPUBuffer;
-
-    //=============== Find Treelet Roots objects =================//
-    private NUM_GAMMA_PASSES = 3;
-    // Karras 2013:
-    // "Using γ = n = 7 as the initial value and executing 3 rounds in total has proven to be a good practical choice in all of our test scenes."
-    // "We have found doubling the value after each round to be very effective in reducing the construction time while having only a minimal impact on BVH quality."
-    private GAMMA_VALUES = [7, 14, 28];
-    private findTreeletShaderModule!: GPUShaderModule;
-    private findTreeletPipelineLayout!: GPUPipelineLayout;
-    private findTreeletBindGroupLayout!: GPUBindGroupLayout;
-    private findTreeletPipeline!: GPUComputePipeline;
-    private findTreeletBindGroup!: GPUBindGroup;
-
-    private gammaUniformBuffers!: GPUBuffer[];
-    private gammaUniformBindGroups!: GPUBindGroup[];
-
-    private findTreeletInternalNodesBuffer!: GPUBuffer;
-    private findTreeletLeafNodesBuffer!: GPUBuffer;
-    private findTreeletTreeletRootsBuffer!: GPUBuffer;
-    private findTreeletAtomicCountersBuffer!: GPUBuffer;
-    private indirectDispatchArgsBuffer!: GPUBuffer;
-
-    //============== Treelet Optimization objects ==================//
-    private treeletOptShaderModule!: GPUShaderModule;
-    private treeletOptPipelineLayout!: GPUPipelineLayout;
-    private treeletOptBindGroupLayout!: GPUBindGroupLayout;
-    private treeletOptPipeline!: GPUComputePipeline;
-    private treeletOptBindGroup!: GPUBindGroup;
-
-    private treeletOptInternalNodesBuffer!: GPUBuffer;
-    private treeletOptLeafNodesBuffer!: GPUBuffer;
-    private treeletOptLeafAABBsBuffer!: GPUBuffer;
-    private treeletOptTreeletRootsBuffer!: GPUBuffer;
 
     //================================//
     constructor()
@@ -716,143 +682,6 @@ class FastParallelBVH
         commandEncoder.setBindGroup(0, this.aabbBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
     }
-
-    //============== find treelet roots methods ==================//
-    initializeFindTreeletPipeline(device: GPUDevice)
-    {
-        this.findTreeletShaderModule = device.createShaderModule({ label: 'Treelet Root Shader Module', code: findTreeletWGSL });
-        this.findTreeletBindGroupLayout = device.createBindGroupLayout({
-            label: 'Treelet Root Bind Group Layout',
-            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // internal nodes buffer
-                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf nodes buffer (containing parent pointers)
-                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // atomic counter for bottom up traversal
-                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // output treelet roots buffer
-                        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },]          // next dispatch args buffer
-        });
-        const gammaUniformBindGroupLayout = device.createBindGroupLayout({
-            label: 'Gamma Uniform Bind Group Layout',
-            entries: [ { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } } ] // Stores just gamma
-        });
-        this.findTreeletPipelineLayout = device.createPipelineLayout({ label: 'Treelet Root Pipeline Layout', bindGroupLayouts: [this.findTreeletBindGroupLayout, gammaUniformBindGroupLayout] });
-        this.findTreeletPipeline = device.createComputePipeline({
-            label: 'Treelet Root Pipeline',
-            layout: this.findTreeletPipelineLayout,
-            compute: {
-                module: this.findTreeletShaderModule,
-                entryPoint: 'cs',
-                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, LEAF_NODE_COUNT: this.numTriangles }
-            },
-        });
-
-        this.findTreeletTreeletRootsBuffer = device.createBuffer({
-            label: 'Treelet Roots Buffer',
-            size: (this.numTriangles - 1) * 4, // In worst case, every internal node is a treelet root
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
-        });
-        this.indirectDispatchArgsBuffer = device.createBuffer({
-            label: 'Indirect Dispatch Args Buffer',
-            size: 4 * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | GPUBufferUsage.INDIRECT
-        });
-        this.findTreeletAtomicCountersBuffer = this.aabbAtomicCountersBuffer;
-        this.findTreeletInternalNodesBuffer = this.internalNodesBuffer;
-        this.findTreeletLeafNodesBuffer = this.leafNodesBuffer;
-
-        this.findTreeletBindGroup = device.createBindGroup({
-            label: 'Treelet Root Bind Group',
-            layout: this.findTreeletBindGroupLayout,
-            entries: [  { binding: 0, resource: { buffer: this.findTreeletInternalNodesBuffer } },
-                        { binding: 1, resource: { buffer: this.findTreeletLeafNodesBuffer } },
-                        { binding: 2, resource: { buffer: this.findTreeletAtomicCountersBuffer } },
-                        { binding: 3, resource: { buffer: this.findTreeletTreeletRootsBuffer } },
-                        { binding: 4, resource: { buffer: this.indirectDispatchArgsBuffer } } ]
-        });
-
-        this.gammaUniformBuffers = [];
-        this.gammaUniformBindGroups = [];
-        for (let i = 0; i < this.NUM_GAMMA_PASSES; i++)
-        {
-            const gammaBuffer = device.createBuffer({
-                label: `Gamma Uniform Buffer Pass ${i}`,
-                size: 16,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-            });
-            device.queue.writeBuffer(gammaBuffer, 0, new Uint32Array([this.GAMMA_VALUES[i]]));
-            const gammaBindGroup = device.createBindGroup({
-                label: `Gamma Uniform Bind Group Pass ${i}`,
-                layout: gammaUniformBindGroupLayout,
-                entries: [ { binding: 0, resource: { buffer: gammaBuffer } } ]
-            });
-            this.gammaUniformBuffers.push(gammaBuffer);
-            this.gammaUniformBindGroups.push(gammaBindGroup);   
-        }
-    }
-
-    //================================//
-    clearDispatchArgsBuffer(encoder: GPUCommandEncoder)
-    {
-        if (!this.indirectDispatchArgsBuffer) return;   
-        encoder.clearBuffer(this.indirectDispatchArgsBuffer); // [0, 1, 1, 0] init will be written in the shader itself.
-    }
-
-    //================================//
-    dispatchFindTreeletPass(commandEncoder: GPUComputePassEncoder, passIndex: number)
-    {
-        if (!this.findTreeletPipeline || !this.findTreeletBindGroup) return;
-
-        const dispatchX = Math.ceil(this.numTriangles / this.THREADS_PER_WORKGROUP);
-        commandEncoder.setPipeline(this.findTreeletPipeline);
-        commandEncoder.setBindGroup(0, this.findTreeletBindGroup);
-        commandEncoder.setBindGroup(1, this.gammaUniformBindGroups[passIndex]);
-        commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
-    }
-
-    //============== Treelet Optimization Methods ==================//
-    initalizeTreeletOptimizationPipeline(device: GPUDevice)
-    {
-        this.treeletOptShaderModule = device.createShaderModule({ label: 'Treelet Optimization Shader Module', code: teeletOptWGSL });
-        this.treeletOptBindGroupLayout = device.createBindGroupLayout({
-            label: 'Treelet Optimization Bind Group Layout',
-            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // internal nodes buffer
-                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // leaf nodes buffer (containing parent pointers)
-                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf AABBs buffer
-                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }] // treelet roots buffer
-        });
-        this.treeletOptPipelineLayout = device.createPipelineLayout({ label: 'Treelet Optimization Pipeline Layout', bindGroupLayouts: [this.treeletOptBindGroupLayout] });
-        this.treeletOptPipeline = device.createComputePipeline({
-            label: 'Treelet Optimization Pipeline',
-            layout: this.treeletOptPipelineLayout,
-            compute: {
-                module: this.treeletOptShaderModule,
-                entryPoint: 'cs',
-                constants: { INTERNAL_NODE_COUNT: this.numTriangles - 1, LEAF_NODE_COUNT: this.numTriangles }
-            },
-        });
-
-        this.treeletOptInternalNodesBuffer = this.internalNodesBuffer;
-        this.treeletOptLeafNodesBuffer = this.leafNodesBuffer;
-        this.treeletOptLeafAABBsBuffer = this.leafAABBsBuffer;
-        this.treeletOptTreeletRootsBuffer = this.findTreeletTreeletRootsBuffer;
-
-        this.treeletOptBindGroup = device.createBindGroup({
-            label: 'Treelet Optimization Bind Group',
-            layout: this.treeletOptBindGroupLayout,
-            entries: [  { binding: 0, resource: { buffer: this.treeletOptInternalNodesBuffer } },
-                        { binding: 1, resource: { buffer: this.treeletOptLeafNodesBuffer } },
-                        { binding: 2, resource: { buffer: this.treeletOptLeafAABBsBuffer } },
-                        { binding: 3, resource: { buffer: this.treeletOptTreeletRootsBuffer } } ]
-        });
-    }
-
-    //================================//
-    dispatchTreeletOptPass(commandEncoder: GPUComputePassEncoder)
-    {
-        if (!this.treeletOptPipeline || !this.treeletOptBindGroup) return;
-
-        commandEncoder.setPipeline(this.treeletOptPipeline);
-        commandEncoder.setBindGroup(0, this.treeletOptBindGroup);
-        commandEncoder.dispatchWorkgroupsIndirect(this.indirectDispatchArgsBuffer, 0);
-    }
 }
 //============== END PAPER IMPLEMENTATION ==================//
 
@@ -1075,7 +904,7 @@ class RayTracer
     async initialize(canvas: HTMLCanvasElement) 
     {
         this.canvas = canvas;
-        this.device = await RequestWebGPUDevice(['timestamp-query']);
+        this.device = await RequestWebGPUDevice(['timestamp-query', 'subgroups']);
         if (this.device === null || this.device === undefined) 
         {
             console.log("Was not able to acquire a WebGPU device.");
@@ -1681,8 +1510,6 @@ class RayTracer
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
         this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
-        this.fastBVH.initializeFindTreeletPipeline(this.device);
-        this.fastBVH.initalizeTreeletOptimizationPipeline(this.device);
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);
@@ -2075,17 +1902,6 @@ class RayTracer
             this.fastBVH.dispatch(computePass);
             computePass.end();
 
-            for (let i = 0; i < 1; i++)
-            {
-                this.fastBVH.clearAtomicCounters(encoder);
-                this.fastBVH.clearDispatchArgsBuffer(encoder);
-
-                const treeletPass = encoder.beginComputePass({ label: `Treelet Optimization Pass ${i}` , ...(this.timestampQuerySet != null && { timestampWrites: { querySet: this.timestampQuerySet.querySet, beginningOfPassWriteIndex: 4 + i*2, endOfPassWriteIndex: 5 + i*2 } }) });
-                this.fastBVH.dispatchFindTreeletPass(treeletPass, i);
-                this.fastBVH.dispatchTreeletOptPass(treeletPass);
-                treeletPass.end();
-            }
-
             if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
                 this.fastBVH.copyResultForReadback(encoder);
 
@@ -2159,10 +1975,7 @@ class RayTracer
                     const times = new BigUint64Array(this.timestampQuerySet!.resultBuffer.getMappedRange());
                     gpuTime = Number(times[1] - times[0]);
                     let computePass1 = Number(times[3] - times[2]);
-                    let computePass2 = Number(times[5] - times[4]);
-                    let computePass3 = Number(times[7] - times[6]);
-                    let computePass4 = Number(times[9] - times[8]);
-                    gpuComputeTime = computePass1 + computePass2 + computePass3 + computePass4;
+                    gpuComputeTime = computePass1;
                     this.timestampQuerySet!.resultBuffer.unmap();
                 });
             }

@@ -26,7 +26,7 @@ struct BVHNode
     left:    u32,
     right:   u32,
     sahCost: f32,
-    _pad1: u32,
+    subTreeNodeCount: u32,
 }; // Size 48
 
 struct LeafAABB 
@@ -108,10 +108,13 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
 
         // Equation (2) in Karras 2013:
         // Ci is set to 1.2, Ct is set to 1.0.
+        // Pre compute sah cost and if the node should be collapsed in last pass
         let internalCost = 1.2 * area + leftChildSAHCost + rightChildSAHCost;
         let collapseCost = 1.0 * area * f32(tricount);
-        internalNodes[parentNode].sahCost = min(internalCost, collapseCost);
 
+        internalNodes[parentNode].sahCost = min(internalCost, collapseCost);
+        internalNodes[parentNode].subTreeNodeCount = 1u + getChildSubTreeNodeCount(leftChildIndex) + getChildSubTreeNodeCount(rightChildIndex);
+        
         parentNode = internalNodes[parentNode].parent;
     }
 }
@@ -161,5 +164,18 @@ fn getChildSAHCost(childIndex: u32) -> f32
     else
     {
         return internalNodes[childIndex].sahCost;
+    }
+}
+
+//================================//
+fn getChildSubTreeNodeCount(childIndex: u32) -> u32
+{
+    if ((childIndex & LEAF_BIT) != 0u)
+    {
+        return 1u;
+    }
+    else
+    {
+        return internalNodes[childIndex].subTreeNodeCount;
     }
 }

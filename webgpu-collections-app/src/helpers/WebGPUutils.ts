@@ -42,7 +42,7 @@ export interface ComputePipelineResources
  * Request access to WebGPU in browser.
  * @returns device
  */
-export async function RequestWebGPUDevice(features: GPUFeatureName[] = []): Promise<GPUDevice | null> 
+export async function RequestWebGPUDevice(features: GPUFeatureName[] = [], ): Promise<GPUDevice | null> 
 {
     if (!navigator.gpu) {
         alert("WebGPU is not supported in this browser.");
@@ -62,10 +62,23 @@ export async function RequestWebGPUDevice(features: GPUFeatureName[] = []): Prom
     {
         const supported = adapter.features.has(name);
         if (!supported) console.warn(`WebGPU feature not supported: ${name}`);
-        else console.log(`WebGPU feature supported: ${name}`);
+        else 
+        {
+            console.log(`WebGPU feature supported: ${name}`);
+        }
         return supported;
     };
     features = features.filter(f => logFeatureSupport(f));
+
+    const info = (adapter as any).info;
+    if (info && typeof info.subgroupMinSize === "number" && typeof info.subgroupMaxSize === "number") 
+    {
+        console.log("subgroup range:", info.subgroupMinSize, info.subgroupMaxSize);
+    }
+    else
+    {
+        console.warn("Could not retrieve subgroup size information from adapter.");
+    }
 
     const device = await adapter.requestDevice(
         {

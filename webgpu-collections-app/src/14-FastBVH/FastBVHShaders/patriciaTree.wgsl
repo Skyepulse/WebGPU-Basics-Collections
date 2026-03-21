@@ -68,8 +68,8 @@ struct BVHNode
 
     left:    u32,
     right:   u32,
-    _pad0: u32,
-    _pad1: u32,
+    sahCost: f32,
+    subTreeNodeCount: u32,
 }; // Size = 3 * 16 = 48 bytes.
 
 //================================//

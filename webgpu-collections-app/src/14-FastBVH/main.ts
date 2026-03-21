@@ -20,6 +20,7 @@ import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
 import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
 import patriciaTreeWGSL from './FastBVHShaders/patriciaTree.wgsl?raw';
 import AABBWGSL from './FastBVHShaders/AABB.wgsl?raw';
+import DFSFlatteningWGSL from './FastBVHShaders/DFSFlattening.wgsl?raw';
 // import teeletOptWGSL from './FastBVHShaders/treeletOptimization.wgsl?raw';
 
 //================================//
@@ -57,6 +58,7 @@ interface PrefixSumLevel
 }
 
 const BVHNodeSize = 48;
+const flatBVHNodeSize = 32;
 const LeafAABBSize = 32;
 //================================//
 class FastParallelBVH
@@ -145,6 +147,15 @@ class FastParallelBVH
     private aabbSortedIndexBuffer!: GPUBuffer;
     private leafAABBsBuffer!: GPUBuffer;
 
+    //=============== DFS Flattening objects =================//
+    private dfsFlatteningShaderModule!: GPUShaderModule;
+    private dfsFlatteningPipelineLayout!: GPUPipelineLayout;
+    private dfsFlatteningBindGroupLayout!: GPUBindGroupLayout;
+    private dfsFlatteningPipeline!: GPUComputePipeline;
+    private dfsFlatteningBindGroup!: GPUBindGroup;
+
+    private dfsFlattenedNodesBuffer!: GPUBuffer;
+
     //================================//
     constructor()
     {
@@ -158,6 +169,7 @@ class FastParallelBVH
         this.dispatchRadixSort(commandEncoder);
         this.dispatchPatriciaTreePass(commandEncoder);
         this.dispatchAABBPass(commandEncoder);
+        this.dispatchDFSFlatteningPass(commandEncoder);
     }
 
     //================================//
@@ -682,6 +694,57 @@ class FastParallelBVH
         commandEncoder.setBindGroup(0, this.aabbBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
     }
+
+    //============== DFS Flattening Methods =================//
+    initializeDFSFlatteningPipeline(device: GPUDevice)
+    {
+        this.dfsFlatteningShaderModule = device.createShaderModule({ label: 'DFS Flattening Shader Module', code: DFSFlatteningWGSL });
+        this.dfsFlatteningBindGroupLayout = device.createBindGroupLayout({
+            label: 'DFS Flattening Bind Group Layout',
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // internal nodes buffer
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf nodes buffer
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf AABBs buffer
+                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // sorted triangle index buffer
+                        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }]           // output flattened BVH buffer
+        });
+        this.dfsFlatteningPipelineLayout = device.createPipelineLayout({ label: 'DFS Flattening Pipeline Layout', bindGroupLayouts: [this.dfsFlatteningBindGroupLayout] });
+        this.dfsFlatteningPipeline = device.createComputePipeline({
+            label: 'DFS Flattening Pipeline',
+            layout: this.dfsFlatteningPipelineLayout,
+            compute: {
+                module: this.dfsFlatteningShaderModule,
+                entryPoint: 'cs',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, INTERNAL_NODE_COUNT: this.numTriangles - 1, LEAF_NODE_COUNT: this.numTriangles }
+            },
+        });
+
+        this.dfsFlattenedNodesBuffer = device.createBuffer({
+            label: 'DFS Flattened BVH Buffer',
+            size: (this.numTriangles * 2 - 1) * flatBVHNodeSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+
+        this.dfsFlatteningBindGroup = device.createBindGroup({
+            label: 'DFS Flattening Bind Group',
+            layout: this.dfsFlatteningBindGroupLayout,
+            entries: [  { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                        { binding: 1, resource: { buffer: this.aabbLeafNodesBuffer } },
+                        { binding: 2, resource: { buffer: this.leafAABBsBuffer } },
+                        { binding: 3, resource: { buffer: this.aabbSortedIndexBuffer } },
+                        { binding: 4, resource: { buffer: this.dfsFlattenedNodesBuffer } } ]
+        });
+    }
+
+    //================================//
+    dispatchDFSFlatteningPass(commandEncoder: GPUComputePassEncoder)
+    {
+        if (!this.dfsFlatteningPipeline || !this.dfsFlatteningBindGroup) return;
+
+        const dispatchX = Math.ceil(((this.numTriangles * 2 - 1)) / this.THREADS_PER_WORKGROUP);
+        commandEncoder.setPipeline(this.dfsFlatteningPipeline);
+        commandEncoder.setBindGroup(0, this.dfsFlatteningBindGroup);
+        commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+    }
 }
 //============== END PAPER IMPLEMENTATION ==================//
 
@@ -904,7 +967,7 @@ class RayTracer
     async initialize(canvas: HTMLCanvasElement) 
     {
         this.canvas = canvas;
-        this.device = await RequestWebGPUDevice(['timestamp-query', 'subgroups']);
+        this.device = await RequestWebGPUDevice(['timestamp-query']);
         if (this.device === null || this.device === undefined) 
         {
             console.log("Was not able to acquire a WebGPU device.");
@@ -1510,6 +1573,7 @@ class RayTracer
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
         this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
+        this.fastBVH.initializeDFSFlatteningPipeline(this.device);
 
         // material buffer for ray tracer
         const materials = info.meshes.map(mesh => mesh.Material);

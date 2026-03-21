@@ -70,6 +70,7 @@ export async function RequestWebGPUDevice(features: GPUFeatureName[] = [], ): Pr
     };
     features = features.filter(f => logFeatureSupport(f));
 
+    /*
     const info = (adapter as any).info;
     if (info && typeof info.subgroupMinSize === "number" && typeof info.subgroupMaxSize === "number") 
     {
@@ -79,6 +80,7 @@ export async function RequestWebGPUDevice(features: GPUFeatureName[] = [], ): Pr
     {
         console.warn("Could not retrieve subgroup size information from adapter.");
     }
+    */
 
     const device = await adapter.requestDevice(
         {

@@ -1850,7 +1850,7 @@ export async function fastBVHExampleScene(meshMaterials: Material[], seed: numbe
     Meshes.push(planeMesh);
 
     // ============== SPHERES ============== //
-    const sphereResolution = 32;
+    const sphereResolution = 16;
     function addSphere(
         mesh: Mesh,
         center: [number, number, number],

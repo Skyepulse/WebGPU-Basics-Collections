@@ -38,13 +38,10 @@ struct LeafAABB
 }; // Size 32
 
 //================================//
-@group(0) @binding(0) var<storage, read_write>  internalNodes:  array<BVHNode>;
-@group(0) @binding(1) var<storage, read>        leafParents:    array<u32>;
-@group(0) @binding(2) var<storage, read_write>  atomicCounters: array<atomic<u32>>;
-@group(0) @binding(3) var<storage, read>        vertices:       array<f32>;
-@group(0) @binding(4) var<storage, read>        indices:        array<u32>;
-@group(0) @binding(5) var<storage, read>        sortedIndices:  array<u32>;
-@group(0) @binding(6) var<storage, read_write>  leafAABBs:      array<LeafAABB>;
+@group(0) @binding(0) var<storage, read>        vertices:      array<f32>;
+@group(0) @binding(1) var<storage, read>        indices:       array<u32>;
+@group(0) @binding(2) var<storage, read>        sortedIndices: array<u32>;
+@group(0) @binding(3) var<storage, read_write>  leafAABBs:     array<LeafAABB>;
 
 //================================//
 @compute
@@ -59,19 +56,20 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
     let leafIndex = gid.x;
     let originalTriangleIndex = sortedIndices[leafIndex];
 
-    let i0 = indices[originalTriangleIndex * 3u];
+    let i0 = indices[originalTriangleIndex * 3u + 0u];
     let i1 = indices[originalTriangleIndex * 3u + 1u];
     let i2 = indices[originalTriangleIndex * 3u + 2u];
-    let v0 = vec3f(vertices[i0 * 3u], vertices[i0 * 3u + 1u], vertices[i0 * 3u + 2u]);
-    let v1 = vec3f(vertices[i1 * 3u], vertices[i1 * 3u + 1u], vertices[i1 * 3u + 2u]);
-    let v2 = vec3f(vertices[i2 * 3u], vertices[i2 * 3u + 1u], vertices[i2 * 3u + 2u]);
+    let v0 = vec3f(vertices[i0 * 3u + 0u], vertices[i0 * 3u + 1u], vertices[i0 * 3u + 2u]);
+    let v1 = vec3f(vertices[i1 * 3u + 0u], vertices[i1 * 3u + 1u], vertices[i1 * 3u + 2u]);
+    let v2 = vec3f(vertices[i2 * 3u + 0u], vertices[i2 * 3u + 1u], vertices[i2 * 3u + 2u]);
 
-    // Each threads AT LEATS writes their start AABB into the leafAABBs buffer.
+    // Each thread writes only its own leaf AABB.
+    // Opposed to the CUDA version of the paper, the atomic counter
+    // does not guarantee that top threads can read properly the children aggregations
+    // such as the AABB of those children or the nodeCount in the subtree it forms.
+
+    // This was very painful to debug, to create and in the end I had no choice but to make
+    // another set of passes to complete the aggregation...
     leafAABBs[leafIndex].aabbMin = min(v0, min(v1, v2));
     leafAABBs[leafIndex].aabbMax = max(v0, max(v1, v2));
-
-    // Internal-node aggregation is handled by the deterministic finalize pass.
-    // Keeping the original parent climb here only duplicates work and reintroduces
-    // the race we are explicitly avoiding.
-    return;
 }

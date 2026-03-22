@@ -1,13 +1,13 @@
 // Deterministic internal-node finalization for the BVH.
-// The original leaf-parallel AABB pass computes leaf bounds, but parent aggregation
-// through cross-invocation state can be unstable. This pass rebuilds all internal-node
-// fields level by level across dispatches.
+// We rebuild the AABB and other aggregatiion information through additional
+// dispatches.
 
+//================================//
 override THREADS_PER_WORKGROUP: u32;
 override INTERNAL_NODE_COUNT: u32;
-
 const LEAF_BIT: u32 = 0x80000000u;
 
+//================================//
 struct BVHNode
 {
     aabbMin: vec3f,
@@ -21,6 +21,7 @@ struct BVHNode
     subTreeNodeCount: u32,
 };
 
+//================================//
 struct LeafAABB
 {
     aabbMin: vec3f,
@@ -29,11 +30,13 @@ struct LeafAABB
     _pad1: u32,
 };
 
+//================================//
 @group(0) @binding(0) var<storage, read_write> internalNodes: array<BVHNode>;
 @group(0) @binding(1) var<storage, read> leafAABBs: array<LeafAABB>;
 @group(0) @binding(2) var<storage, read> readyIn: array<u32>;
 @group(0) @binding(3) var<storage, read_write> readyOut: array<u32>;
 
+//================================//
 @compute
 @workgroup_size(THREADS_PER_WORKGROUP)
 fn cs(@builtin(global_invocation_id) gid: vec3u)
@@ -78,6 +81,7 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
     readyOut[nodeIndex] = 1u;
 }
 
+//================================//
 fn isChildReady(childIndex: u32) -> bool
 {
     if ((childIndex & LEAF_BIT) != 0u)
@@ -88,6 +92,7 @@ fn isChildReady(childIndex: u32) -> bool
     return readyIn[childIndex] != 0u;
 }
 
+//================================//
 fn getChildAABB(childIndex: u32) -> LeafAABB
 {
     if ((childIndex & LEAF_BIT) != 0u)
@@ -99,6 +104,7 @@ fn getChildAABB(childIndex: u32) -> LeafAABB
     return LeafAABB(internalNodes[childIndex].aabbMin, 0u, internalNodes[childIndex].aabbMax, 0u);
 }
 
+//================================//
 fn getChildTriangleCount(childIndex: u32) -> u32
 {
     if ((childIndex & LEAF_BIT) != 0u)
@@ -109,12 +115,14 @@ fn getChildTriangleCount(childIndex: u32) -> u32
     return internalNodes[childIndex].triangleCount;
 }
 
+//================================//
 fn surfaceArea(aabbMin: vec3f, aabbMax: vec3f) -> f32
 {
     let d = aabbMax - aabbMin;
     return 2.0 * (d.x * d.y + d.y * d.z + d.z * d.x);
 }
 
+//================================//
 fn getChildSAHCost(childIndex: u32) -> f32
 {
     if ((childIndex & LEAF_BIT) != 0u)
@@ -126,6 +134,7 @@ fn getChildSAHCost(childIndex: u32) -> f32
     return internalNodes[childIndex].sahCost;
 }
 
+//================================//
 fn getChildSubTreeNodeCount(childIndex: u32) -> u32
 {
     if ((childIndex & LEAF_BIT) != 0u)

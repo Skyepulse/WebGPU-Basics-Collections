@@ -74,9 +74,7 @@ class FastParallelBVH
     private ITEMS_PER_WORKGROUP = 2 * this.THREADS_PER_WORKGROUP;
     private BIT_COUNT = 30;
     private NUM_PASSES = this.BIT_COUNT / 2;
-    private AABB_FINALIZE_EXTRA_LEVELS = 8;
-
-    //=============== Min Max objects =================// 
+    //=============== Min Max objects =================//
     private minMaxPipelineLayout!: GPUPipelineLayout;
     private minMaxBindGroupLayout!: GPUBindGroupLayout;
     private minMaxReduceShaderModule!: GPUShaderModule;
@@ -148,7 +146,6 @@ class FastParallelBVH
 
     private aabbInternalNodesBuffer!: GPUBuffer;
     private aabbLeafNodesBuffer!: GPUBuffer;
-    private aabbAtomicCountersBuffer!: GPUBuffer;
     private aabbVertexBuffer!: GPUBuffer;
     private aabbIndexBuffer!: GPUBuffer;
     private aabbSortedIndexBuffer!: GPUBuffer;
@@ -639,13 +636,10 @@ class FastParallelBVH
         this.aabbShaderModule = device.createShaderModule({ label: 'AABB Shader Module', code: AABBWGSL });
         this.aabbBindGroupLayout = device.createBindGroupLayout({
             label: 'AABB Bind Group Layout',
-            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // internal nodes buffer
-                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf nodes buffer (containing parent pointers)
-                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // atomic counters
-                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // vertex buffer
-                        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // index buffer
-                        { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // sorted index buffer (output of radix sort pass)
-                        { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },] // leaf AABBs buffer
+            entries: [  { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // vertex buffer
+                        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // index buffer
+                        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // sorted index buffer
+                        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },]          // leaf AABBs buffer
         });
         this.aabbPipelineLayout = device.createPipelineLayout({ label: 'AABB Pipeline Layout', bindGroupLayouts: [this.aabbBindGroupLayout] });
         this.aabbPipeline = device.createComputePipeline({
@@ -660,10 +654,13 @@ class FastParallelBVH
         
         this.aabbInternalNodesBuffer = this.internalNodesBuffer;
         this.aabbLeafNodesBuffer = this.leafNodesBuffer;
-        this.aabbAtomicCountersBuffer = device.createBuffer({
-            label: 'AABB Atomic Counters Buffer',
-            size: 4 * (this.numTriangles - 1), // counters for internal nodes
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST // We need Copy_dst so I can clear it to 0s ech pass
+        this.aabbVertexBuffer = vertexBuffer;
+        this.aabbIndexBuffer = indexBuffer;
+        this.aabbSortedIndexBuffer = this.valuesBufferB;
+        this.leafAABBsBuffer = device.createBuffer({
+            label: 'Leaf AABBs Buffer',
+            size: this.numTriangles * LeafAABBSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
         });
         this.aabbReadyBufferA = device.createBuffer({
             label: 'AABB Ready Buffer A',
@@ -675,25 +672,14 @@ class FastParallelBVH
             size: Math.max(this.numTriangles - 1, 1) * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.aabbVertexBuffer = vertexBuffer;
-        this.aabbIndexBuffer = indexBuffer;
-        this.aabbSortedIndexBuffer = this.valuesBufferB;
-        this.leafAABBsBuffer = device.createBuffer({
-            label: 'Leaf AABBs Buffer',
-            size: this.numTriangles * LeafAABBSize,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
-        });
 
         this.aabbBindGroup = device.createBindGroup({
             label: 'AABB Bind Group',
             layout: this.aabbBindGroupLayout,
-            entries: [  { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
-                        { binding: 1, resource: { buffer: this.aabbLeafNodesBuffer } },
-                        { binding: 2, resource: { buffer: this.aabbAtomicCountersBuffer } },
-                        { binding: 3, resource: { buffer: this.aabbVertexBuffer } },
-                        { binding: 4, resource: { buffer: this.aabbIndexBuffer } },
-                        { binding: 5, resource: { buffer: this.aabbSortedIndexBuffer } },
-                        { binding: 6, resource: { buffer: this.leafAABBsBuffer } } ]
+            entries: [  { binding: 0, resource: { buffer: this.aabbVertexBuffer } },
+                        { binding: 1, resource: { buffer: this.aabbIndexBuffer } },
+                        { binding: 2, resource: { buffer: this.aabbSortedIndexBuffer } },
+                        { binding: 3, resource: { buffer: this.leafAABBsBuffer } } ]
         });
     }
 
@@ -720,13 +706,9 @@ class FastParallelBVH
             compute: {
                 module: this.aabbFinalizeShaderModule,
                 entryPoint: 'cs',
-                constants: {
-                    THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP,
-                    INTERNAL_NODE_COUNT: this.numTriangles - 1,
-                }
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, INTERNAL_NODE_COUNT: this.numTriangles - 1 }
             },
         });
-
         this.aabbFinalizeBindGroups = [
             device.createBindGroup({
                 label: 'AABB Finalize Bind Group 0',
@@ -755,8 +737,8 @@ class FastParallelBVH
     clearAtomicCounters(encoder: GPUCommandEncoder)
     {
         if (!this.aabbReadyBufferA || !this.aabbReadyBufferB) return;
-        if (this.aabbReadyBufferA) encoder.clearBuffer(this.aabbReadyBufferA);
-        if (this.aabbReadyBufferB) encoder.clearBuffer(this.aabbReadyBufferB);
+        encoder.clearBuffer(this.aabbReadyBufferA);
+        encoder.clearBuffer(this.aabbReadyBufferB);
     }
 
     //================================//
@@ -764,32 +746,27 @@ class FastParallelBVH
     {
         if (!this.aabbPipeline || !this.aabbBindGroup) return;
 
-        const dispatchX = Math.ceil((this.numTriangles) / this.THREADS_PER_WORKGROUP);
+        const dispatchX = Math.ceil(this.numTriangles / this.THREADS_PER_WORKGROUP);
         commandEncoder.setPipeline(this.aabbPipeline);
         commandEncoder.setBindGroup(0, this.aabbBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
     }
 
     //================================//
+    // The number of dispatches can be upper bounded
+    // by BIT_COUNT (30 here) since it is
+    // what is used to compute morton codes and thus determines the tree structure.
     dispatchAABBFinalizePass(commandEncoder: GPUComputePassEncoder)
     {
         if (!this.aabbFinalizePipeline || !this.aabbFinalizeBindGroups) return;
 
         const dispatchX = Math.ceil((this.numTriangles - 1) / this.THREADS_PER_WORKGROUP);
-        if (dispatchX <= 0)
-        {
-            return;
-        }
-
-        const finalizeIterations = Math.max(
-            1,
-            Math.ceil(Math.log2(Math.max(this.numTriangles, 2))) + this.AABB_FINALIZE_EXTRA_LEVELS
-        );
+        if (dispatchX <= 0) return;
 
         commandEncoder.setPipeline(this.aabbFinalizePipeline);
-        for (let iteration = 0; iteration < finalizeIterations; iteration++)
+        for (let i = 0; i < this.BIT_COUNT; i++)
         {
-            commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[iteration % 2]);
+            commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[i % 2]);
             commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
         }
     }

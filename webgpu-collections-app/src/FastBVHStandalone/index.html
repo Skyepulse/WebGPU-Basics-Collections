@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FastBVH Standalone</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-family: monospace;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #canvas-container {
+            position: relative;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #info {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #00ff88;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            white-space: pre;
+            pointer-events: none;
+            line-height: 1.5;
+        }
+
+        #util {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(20, 20, 30, 0.88);
+            color: #e0e0e0;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px 14px;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: calc(100vh - 16px);
+            overflow-y: auto;
+            min-width: 200px;
+        }
+
+        #util label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+
+        #util input[type="range"] {
+            width: 120px;
+            accent-color: #00ff88;
+        }
+
+        #util input[type="number"] {
+            width: 80px;
+            background: #2a2a3a;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 2px 4px;
+        }
+
+        #util button {
+            background: #2a2a3a;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        #util button:hover {
+            background: #3a3a4a;
+        }
+
+        #profiler {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="gpuCanvas"></canvas>
+        <div id="info"></div>
+        <div id="util"></div>
+        <canvas id="profiler"></canvas>
+    </div>
+
+    <script type="module">
+        import { startup } from './src/main.js';
+
+        const canvas = document.getElementById('gpuCanvas');
+
+        // Match canvas resolution to display size
+        const ro = new ResizeObserver(() => {
+            canvas.width  = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+        });
+        ro.observe(canvas);
+        canvas.width  = canvas.clientWidth  || window.innerWidth;
+        canvas.height = canvas.clientHeight || window.innerHeight;
+
+        startup(canvas).catch(err => {
+            console.error('FastBVH startup failed:', err);
+            document.getElementById('info').textContent = 'Error: ' + err.message + '\nSee console for details.';
+        });
+    </script>
+</body>
+</html>

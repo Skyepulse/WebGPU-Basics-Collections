@@ -305,7 +305,7 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
         let node = bvhNodes[index];
         let isLeaf = node.count > 0u;
 
-        if (!rayAABBIntersect(localRay, invDir, node.minB, node.maxB, 1e30))
+        if (!rayAABBIntersect(ray, invDir, node.minB, node.maxB, 1e30))
         {
             if (isLeaf) { index++; } else { index = node.leftOrFirst; }
             while (depth > 0u && index >= returnTarget[depth - 1u]) { depth--; }
@@ -320,6 +320,7 @@ fn debugBVHTraversal(ray: Ray, targetDepth: u32) -> vec3f
             continue;
         }
 
+        if (depth >= 32u) { return vec3f(1.0, 0.0, 1.0); }
         returnTarget[depth] = node.leftOrFirst;
         depth++;
         index++;

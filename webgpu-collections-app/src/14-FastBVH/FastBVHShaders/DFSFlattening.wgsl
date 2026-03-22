@@ -68,7 +68,7 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
         flatBVHNodes[dfsIndex].maxB = internalNodes[nodeIndex].aabbMax;
 
         // correct miss link in the traversal is the first node after this whole subtree
-        flatBVHNodes[dfsIndex].leftOrFirst = dfsIndex + internalNodes[nodeIndex].subTreeNodeCount;
+        flatBVHNodes[dfsIndex].leftOrFirst = min(dfsIndex + internalNodes[nodeIndex].subTreeNodeCount, totalNodes);
         flatBVHNodes[dfsIndex].count = 0u;
         return;
     }

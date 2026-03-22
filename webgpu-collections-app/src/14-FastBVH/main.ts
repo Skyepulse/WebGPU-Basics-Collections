@@ -20,6 +20,7 @@ import radixPrefixSum from './FastBVHShaders/radixPrefixSum.wgsl?raw';
 import radixReorderWGSL from './FastBVHShaders/radixReorder.wgsl?raw';
 import patriciaTreeWGSL from './FastBVHShaders/patriciaTree.wgsl?raw';
 import AABBWGSL from './FastBVHShaders/AABB.wgsl?raw';
+import AABBFinalizeWGSL from './FastBVHShaders/AABBFinalize.wgsl?raw';
 import DFSFlatteningWGSL from './FastBVHShaders/DFSFlattening.wgsl?raw';
 // import teeletOptWGSL from './FastBVHShaders/treeletOptimization.wgsl?raw';
 
@@ -73,6 +74,7 @@ class FastParallelBVH
     private ITEMS_PER_WORKGROUP = 2 * this.THREADS_PER_WORKGROUP;
     private BIT_COUNT = 30;
     private NUM_PASSES = this.BIT_COUNT / 2;
+    private AABB_FINALIZE_EXTRA_LEVELS = 8;
 
     //=============== Min Max objects =================// 
     private minMaxPipelineLayout!: GPUPipelineLayout;
@@ -138,6 +140,11 @@ class FastParallelBVH
     private aabbBindGroupLayout!: GPUBindGroupLayout;
     private aabbPipeline!: GPUComputePipeline;
     private aabbBindGroup!: GPUBindGroup;
+    private aabbFinalizeShaderModule!: GPUShaderModule;
+    private aabbFinalizePipelineLayout!: GPUPipelineLayout;
+    private aabbFinalizeBindGroupLayout!: GPUBindGroupLayout;
+    private aabbFinalizePipeline!: GPUComputePipeline;
+    private aabbFinalizeBindGroups!: [GPUBindGroup, GPUBindGroup];
 
     private aabbInternalNodesBuffer!: GPUBuffer;
     private aabbLeafNodesBuffer!: GPUBuffer;
@@ -146,6 +153,8 @@ class FastParallelBVH
     private aabbIndexBuffer!: GPUBuffer;
     private aabbSortedIndexBuffer!: GPUBuffer;
     private leafAABBsBuffer!: GPUBuffer;
+    private aabbReadyBufferA!: GPUBuffer;
+    private aabbReadyBufferB!: GPUBuffer;
 
     //=============== DFS Flattening objects =================//
     private dfsFlatteningShaderModule!: GPUShaderModule;
@@ -169,6 +178,7 @@ class FastParallelBVH
         this.dispatchRadixSort(commandEncoder);
         this.dispatchPatriciaTreePass(commandEncoder);
         this.dispatchAABBPass(commandEncoder);
+        this.dispatchAABBFinalizePass(commandEncoder);
         this.dispatchDFSFlatteningPass(commandEncoder);
     }
 
@@ -655,6 +665,16 @@ class FastParallelBVH
             size: 4 * (this.numTriangles - 1), // counters for internal nodes
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST // We need Copy_dst so I can clear it to 0s ech pass
         });
+        this.aabbReadyBufferA = device.createBuffer({
+            label: 'AABB Ready Buffer A',
+            size: Math.max(this.numTriangles - 1, 1) * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.aabbReadyBufferB = device.createBuffer({
+            label: 'AABB Ready Buffer B',
+            size: Math.max(this.numTriangles - 1, 1) * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
         this.aabbVertexBuffer = vertexBuffer;
         this.aabbIndexBuffer = indexBuffer;
         this.aabbSortedIndexBuffer = this.valuesBufferB;
@@ -678,10 +698,65 @@ class FastParallelBVH
     }
 
     //================================//
+    initializeAABBFinalizePipeline(device: GPUDevice)
+    {
+        this.aabbFinalizeShaderModule = device.createShaderModule({ label: 'AABB Finalize Shader Module', code: AABBFinalizeWGSL });
+        this.aabbFinalizeBindGroupLayout = device.createBindGroupLayout({
+            label: 'AABB Finalize Bind Group Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+            ]
+        });
+        this.aabbFinalizePipelineLayout = device.createPipelineLayout({
+            label: 'AABB Finalize Pipeline Layout',
+            bindGroupLayouts: [this.aabbFinalizeBindGroupLayout]
+        });
+        this.aabbFinalizePipeline = device.createComputePipeline({
+            label: 'AABB Finalize Pipeline',
+            layout: this.aabbFinalizePipelineLayout,
+            compute: {
+                module: this.aabbFinalizeShaderModule,
+                entryPoint: 'cs',
+                constants: {
+                    THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP,
+                    INTERNAL_NODE_COUNT: this.numTriangles - 1,
+                }
+            },
+        });
+
+        this.aabbFinalizeBindGroups = [
+            device.createBindGroup({
+                label: 'AABB Finalize Bind Group 0',
+                layout: this.aabbFinalizeBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                    { binding: 1, resource: { buffer: this.leafAABBsBuffer } },
+                    { binding: 2, resource: { buffer: this.aabbReadyBufferA } },
+                    { binding: 3, resource: { buffer: this.aabbReadyBufferB } },
+                ]
+            }),
+            device.createBindGroup({
+                label: 'AABB Finalize Bind Group 1',
+                layout: this.aabbFinalizeBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                    { binding: 1, resource: { buffer: this.leafAABBsBuffer } },
+                    { binding: 2, resource: { buffer: this.aabbReadyBufferB } },
+                    { binding: 3, resource: { buffer: this.aabbReadyBufferA } },
+                ]
+            })
+        ];
+    }
+
+    //================================//
     clearAtomicCounters(encoder: GPUCommandEncoder)
     {
-        if (!this.aabbAtomicCountersBuffer) return;
-        encoder.clearBuffer(this.aabbAtomicCountersBuffer);
+        if (!this.aabbReadyBufferA || !this.aabbReadyBufferB) return;
+        if (this.aabbReadyBufferA) encoder.clearBuffer(this.aabbReadyBufferA);
+        if (this.aabbReadyBufferB) encoder.clearBuffer(this.aabbReadyBufferB);
     }
 
     //================================//
@@ -693,6 +768,30 @@ class FastParallelBVH
         commandEncoder.setPipeline(this.aabbPipeline);
         commandEncoder.setBindGroup(0, this.aabbBindGroup);
         commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+    }
+
+    //================================//
+    dispatchAABBFinalizePass(commandEncoder: GPUComputePassEncoder)
+    {
+        if (!this.aabbFinalizePipeline || !this.aabbFinalizeBindGroups) return;
+
+        const dispatchX = Math.ceil((this.numTriangles - 1) / this.THREADS_PER_WORKGROUP);
+        if (dispatchX <= 0)
+        {
+            return;
+        }
+
+        const finalizeIterations = Math.max(
+            1,
+            Math.ceil(Math.log2(Math.max(this.numTriangles, 2))) + this.AABB_FINALIZE_EXTRA_LEVELS
+        );
+
+        commandEncoder.setPipeline(this.aabbFinalizePipeline);
+        for (let iteration = 0; iteration < finalizeIterations; iteration++)
+        {
+            commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[iteration % 2]);
+            commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+        }
     }
 
     //============== DFS Flattening Methods =================//
@@ -751,6 +850,12 @@ class FastParallelBVH
     {
         return this.dfsFlattenedNodesBuffer;
     }
+
+    //================================//
+    getFinalFlattenedBVHNodeCount(): number
+    {
+        return this.numTriangles * 2 - 1;
+    }
 }
 //============== END PAPER IMPLEMENTATION ==================//
 
@@ -803,6 +908,10 @@ interface NO extends PipelineResources
 
     bvhLineGeometryBuffers: GPUBuffer[];
     bvhLineCounts: number[];
+    bvhDebugBindGroup: GPUBindGroup;
+    bvhDebugMaterialBuffer: GPUBuffer;
+    bvhDebugModelMatrixBuffer: GPUBuffer;
+    bvhDebugNormalMatrixBuffer: GPUBuffer;
 
     bvhDrawPipelineLayout: GPUPipelineLayout;
     bvhDrawPipeline: GPURenderPipeline;
@@ -865,7 +974,7 @@ class RayTracer
     private RO: RO;
 
     //================================//
-    private useRaytracing: boolean = true;
+    private useRaytracing: boolean = false;
     private rayTracerMode: RayTracerMode = RayTracerMode.raytrace;
     private numBounces: number = 3;
     private numSpheres: number = 1;
@@ -964,7 +1073,7 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
         addCheckbox('Show BVH', this.showBVH, utilElement, (value) => { this.showBVH = value; this.rayTracerMode = value ? RayTracerMode.BVHVisualization : RayTracerMode.raytrace; });
         utilElement.appendChild(document.createElement('br'));
-        addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; this.rebuildBVHBuffer(); });
+        addSlider('BVH Depth', this.bvhDepth === Infinity ? 32 : this.bvhDepth, 1, 32, 1, utilElement, (value) => { this.bvhDepth = value === 32 ? Infinity : value; });
         utilElement.appendChild(document.createElement('br'));
         addNumberInput('Random Seed', this.seed, 0, 10<<20, 1, utilElement, (value) => { this.seed = value; this.initializeBuffers(); });
         utilElement.appendChild(document.createElement('br'));
@@ -1412,17 +1521,74 @@ class RayTracer
             }],
         });
 
-        const lineData: Float32Array[] = this.getBVHGeometry(Infinity); // This way create buffer at max capacity
-        this.NO.bvhLineGeometryBuffers = [];
-        for (let i = 0; i < lineData.length; i++)
-        {
-            this.NO.bvhLineGeometryBuffers[i] = this.device.createBuffer({
-                label: `BVH Line Geometry Buffer ${i}`,
-                size: lineData[i].byteLength,
-                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-            });
-            this.device.queue.writeBuffer(this.NO.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
-        }
+        this.NO.bvhDebugMaterialBuffer = this.device.createBuffer({
+            label: 'BVH Debug Material Buffer',
+            size: MATERIAL_SIZE * 4,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.NO.bvhDebugMaterialBuffer, 0, new Float32Array(MATERIAL_SIZE) as BufferSource);
+
+        this.NO.bvhDebugModelMatrixBuffer = this.device.createBuffer({
+            label: 'BVH Debug Model Matrix Buffer',
+            size: 16 * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.NO.bvhDebugModelMatrixBuffer, 0, new Float32Array(glm.mat4.create()) as BufferSource);
+
+        this.NO.bvhDebugNormalMatrixBuffer = this.device.createBuffer({
+            label: 'BVH Debug Normal Matrix Buffer',
+            size: 12 * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.device.queue.writeBuffer(this.NO.bvhDebugNormalMatrixBuffer, 0, new Float32Array([
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+        ]) as BufferSource);
+
+        this.NO.bvhDebugBindGroup = this.device.createBindGroup({
+            label: 'BVH Debug Bind Group',
+            layout: this.NO.materialUniformBindGroupLayout,
+            entries: [{
+                binding: 0,
+                resource: { buffer: this.NO.bvhDebugMaterialBuffer },
+            },
+            {
+                binding: 1,
+                resource: this.NO.sampler,
+            },
+            {
+                binding: 2,
+                resource: placeholderTexture.createView(),
+            },
+            {
+                binding: 3,
+                resource: placeholderTexture.createView(),
+            },
+            {
+                binding: 4,
+                resource: placeholderTexture.createView(),
+            },
+            {
+                binding: 5,
+                resource: placeholderTexture.createView(),
+            },
+            {
+                binding: 6,
+                resource: { buffer: this.NO.bvhDebugModelMatrixBuffer },
+            },
+            {
+                binding: 7,
+                resource: { buffer: this.NO.bvhDebugNormalMatrixBuffer },
+            }],
+        });
+
+        this.NO.bvhLineGeometryBuffers = [this.device.createBuffer({
+            label: 'BVH Debug Line Geometry Buffer',
+            size: 4,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        })];
+        this.NO.bvhLineCounts = [0];
 
         // Ray Tracer Objects Buffers
         const flattenedPositions: number[] = [];
@@ -1564,6 +1730,7 @@ class RayTracer
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
         this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
+        this.fastBVH.initializeAABBFinalizePipeline(this.device);
         this.fastBVH.initializeDFSFlatteningPipeline(this.device);
 
         this.RO.bindGroup = this.device.createBindGroup({
@@ -1801,9 +1968,9 @@ class RayTracer
             floatView[23] = this.bvhDepth;
 
             uintView[24] = this.numBounces;
-            floatView[25] = 0.0;
-            floatView[26] = 0.0;
-            floatView[27] = 0.0;
+            uintView[25] = this.fastBVH.getFinalFlattenedBVHNodeCount();
+            uintView[26] = 0;
+            uintView[27] = 0;
 
             // All lights
             for (let i = 0; i < 3; i++)
@@ -2024,12 +2191,9 @@ class RayTracer
                 {
                     pass.setPipeline(this.NO.bvhDrawPipeline);
                     pass.setBindGroup(0, this.NO.bindGroup);
-                    for (let i = 0; i < this.NO.bvhLineGeometryBuffers.length; i++)
-                    {
-                        pass.setBindGroup(1, this.NO.materialBindGroups[i]);
-                        pass.setVertexBuffer(0, this.NO.bvhLineGeometryBuffers[i]);
-                        pass.draw(this.NO.bvhLineCounts[i]);
-                    }
+                    pass.setBindGroup(1, this.NO.bvhDebugBindGroup);
+                    pass.setVertexBuffer(0, this.NO.bvhLineGeometryBuffers[0]);
+                    pass.draw(this.NO.bvhLineCounts[0]);
                 }
             }
             pass.end();
@@ -2246,41 +2410,7 @@ class RayTracer
             );
         }
     }
-
-    //================================//
-    getBVHGeometry(desiredDepth: number): Float32Array[]
-    {
-        if (this.NO.sceneInformation.meshes.length === 0) return [];
-
-        this.NO.bvhLineCounts = [];
-        const chunks: Float32Array[] = [];
-        for (let matNum = 0; matNum < this.NO.sceneInformation.meshes.length; matNum++)
-        {
-            const { vertexData, count } = this.NO.sceneInformation.meshes[matNum].GetBVHGeometry(desiredDepth);
-            chunks.push(vertexData);
-            this.NO.bvhLineCounts.push(count);
-        }
-        return chunks;
-    }
-
-    //================================//
-    rebuildBVHBuffer()
-    {
-        if (this.device === null) return;
-
-        const lineData: Float32Array[] = this.getBVHGeometry(this.bvhDepth);
-        
-        for (let i = 0; i < lineData.length; i++)
-        {
-            this.NO.bvhLineGeometryBuffers[i] = this.device.createBuffer({
-                label: `BVH Line Geometry Buffer ${i}`,
-                size: lineData[i].byteLength,
-                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-            });
-            this.device.queue.writeBuffer(this.NO.bvhLineGeometryBuffers[i], 0, lineData[i] as BufferSource);
-        }
-    }
-
+    
     //================================//
     rayCastOnMeshes(screenX: number, screenY: number): number
     {

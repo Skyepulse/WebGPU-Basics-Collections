@@ -705,7 +705,7 @@ class RayTracer
         if (this.keysPressed.has('s'))                               dz += this.camera.moveSpeed;
         if (this.keysPressed.has('q') || this.keysPressed.has('a')) dx -= this.camera.moveSpeed;
         if (this.keysPressed.has('d'))                               dx += this.camera.moveSpeed;
-        if (this.keysPressed.has(' '))                               dy += this.camera.moveSpeed;
+        if (this.keysPressed.has('shift'))                           dy += this.camera.moveSpeed;
         if (this.keysPressed.has('alt'))                             dy -= this.camera.moveSpeed;
 
         if (dx !== 0 || dy !== 0 || dz !== 0)

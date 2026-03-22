@@ -89,6 +89,7 @@
     const startupFunctions = [startup_1, startup_2, startup_3, startup_4, startup_5, startup_6, startup_7, startup_8, startup_9, startup_10, startup_11, startup_12, startup_13, startup_14];
     const numberOfExamples = startupFunctions.length;
     const startupNames = ['Basic Start', 'Compute Basics', 'Variables and Uniforms', 'Storage Buffer Instancing', 'Vertex and Index Buffers', 'Video', 'Game', 'Ray Trace', 'Transparency', 'PBR', 'BVH', 'Monte Carlo', 'Radix Sort', 'Fast BVH'];
+    const DEFAULT_EXAMPLE_INDEX = 12;
     
     // Slider state
     const hoveredIndex = ref<number|null>(null);
@@ -98,9 +99,38 @@
     const renderUtils = ref<boolean>(true);
 
     //================================//
+    function parseExampleFromPath() {
+        const segments = window.location.pathname.split('/').filter(Boolean);
+        const lastSegment = segments.at(-1);
+        const parsedIndex = Number.parseInt(lastSegment ?? '', 10);
+
+        if (!Number.isNaN(parsedIndex) && parsedIndex >= 1 && parsedIndex <= numberOfExamples) {
+            const baseSegments = segments.slice(0, -1);
+            return {
+                exampleIndex: parsedIndex,
+                basePath: baseSegments.length > 0 ? `/${baseSegments.join('/')}` : ''
+            };
+        }
+
+        return {
+            exampleIndex: DEFAULT_EXAMPLE_INDEX,
+            basePath: segments.length > 0 ? `/${segments.join('/')}` : ''
+        };
+    }
+
+    const { basePath } = parseExampleFromPath();
+
+    //================================//
+    function updateUrl(index: number) {
+        window.history.replaceState(null, '', `${basePath}/${index}`);
+    }
+
+    //================================//
     async function selectExample(index: number) {
         if (isSwitching.value) return; // Prevent multiple clicks while switching
         isSwitching.value = true;
+
+        updateUrl(index);
 
         if (currentRenderer.value && typeof currentRenderer.value.cleanup === 'function') {
             await currentRenderer.value.cleanup();
@@ -167,6 +197,7 @@
         addUtilElementDefaults();
         await nextTick();
         if (profiler.value) setProfilerInstance(profiler.value);
-        selectExample(14);
+        const { exampleIndex } = parseExampleFromPath();
+        selectExample(exampleIndex);
     });
 </script>

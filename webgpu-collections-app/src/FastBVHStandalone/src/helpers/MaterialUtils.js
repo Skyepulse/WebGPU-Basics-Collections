@@ -1,5 +1,5 @@
 //================================//
-export const MATERIAL_SIZE = 16; // 16 floats = 64 bytes
+export const MATERIAL_SIZE = 16;
 
 //================================//
 export function createDefaultMaterial({

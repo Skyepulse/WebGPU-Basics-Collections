@@ -598,7 +598,6 @@ export class FastParallelBVH
         const dispatchX = Math.ceil((this.numTriangles - 1) / this.THREADS_PER_WORKGROUP);
         if (dispatchX <= 0) return;
 
-        // First prepare: reset frontierOutCount[0] before the loop starts
         commandEncoder.setPipeline(this.aabbFinalizePreparePipeline);
         commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[0]);
         commandEncoder.dispatchWorkgroups(1, 1, 1);
@@ -607,12 +606,10 @@ export class FastParallelBVH
         {
             const bindGroupIndex = i % 2;
 
-            // Process the current frontier → write results + add parents to out-frontier
             commandEncoder.setPipeline(this.aabbFinalizeReducePipeline);
             commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[bindGroupIndex]);
             commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
 
-            // Reset the next out-frontier count before swapping
             commandEncoder.setPipeline(this.aabbFinalizePreparePipeline);
             commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[1 - bindGroupIndex]);
             commandEncoder.dispatchWorkgroups(1, 1, 1);

@@ -69,7 +69,7 @@ class RayTracer
         this.NO = {};
         this.RO = {};
 
-        this.useRaytracing = false;
+        this.useRaytracing = true;
         this.rayTracerMode = RayTracerMode.raytrace;
         this.numBounces = 3;
         this.numSpheres = 5;
@@ -78,6 +78,7 @@ class RayTracer
         this.sphereCenters = [];
         this.activeContextMenu = null;
         this.seed = 0;
+        this.withPlane = true;
 
         this.showBVH = false;
         this.bvhDepth = Infinity;
@@ -308,7 +309,7 @@ class RayTracer
 
         const meshMaterials = this.materials.length > 0 ? this.materials : [];
 
-        const sceneData = await fastBVHExampleScene(meshMaterials, this.seed, this.numSpheres);
+        const sceneData = await fastBVHExampleScene(meshMaterials, this.seed, this.numSpheres, this.withPlane);
         const {
             worldPositionData,
             worldNormalData,
@@ -323,6 +324,7 @@ class RayTracer
         this.materials = materials;
         this.perMeshData = perMeshData;
         this.sphereCenters = sceneData.sphereCenters;
+        this.sphereMeshOffset = perMeshData.length - sceneData.sphereCenters.length;
         this.RO.perMeshWorldPositionOffsets = perMeshWorldPositionOffsets;
 
         const numMeshes = perMeshData.length;
@@ -556,9 +558,10 @@ class RayTracer
         const commonW = 1024;
         const commonH = 1024;
 
+        const numTexturedMaterials = Math.max(1, materials.filter(m => m.textureIndex >= 0).length);
         this.RO.textureArray = this.device.createTexture({
             label: 'Ray Tracer Material Texture Array',
-            size: [commonW, commonH, numTexturesPerMaterial * numMeshes],
+            size: [commonW, commonH, numTexturesPerMaterial * numTexturedMaterials],
             format: 'rgba8unorm',
             mipLevelCount: 1,
             sampleCount: 1,
@@ -567,7 +570,7 @@ class RayTracer
         });
 
         const placeHolderImage = createPlaceholderImage(1024, 32);
-        for (let i = 0; i < numMeshes; i++) {
+        for (let i = 0; i < numTexturedMaterials; i++) {
             for (let typeIndex = 0; typeIndex < numTexturesPerMaterial; typeIndex++) {
                 this.device.queue.copyExternalImageToTexture(
                     { source: placeHolderImage },
@@ -644,6 +647,11 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
         addSlider('Number of Spheres', this.numSpheres, 1, 99, 1, utilElement, (value) => {
             this.numSpheres = value;
+            this.initializeBuffers();
+        });
+        utilElement.appendChild(document.createElement('br'));
+        addCheckbox('Include Plane', this.withPlane, utilElement, (value) => {
+            this.withPlane = value;
             this.initializeBuffers();
         });
     }
@@ -828,7 +836,7 @@ class RayTracer
             const dy = ny - baseCY;
             const dz = nz - baseCZ;
 
-            const meshIndex = i + 1;
+            const meshIndex = i + this.sphereMeshOffset;
             const basePositions = this.perMeshData[meshIndex].positions;
             const numVerts = basePositions.length / 3;
             const translated = new Float32Array(basePositions.length);
@@ -840,6 +848,7 @@ class RayTracer
 
             const byteOffset = this.RO.perMeshWorldPositionOffsets[meshIndex];
             this.device.queue.writeBuffer(this.RO.worldPositionStorageBuffer, byteOffset, translated);
+            this.device.queue.writeBuffer(this.NO.positionBuffers[meshIndex], 0, translated);
         }
     }
 

@@ -1,7 +1,7 @@
 import { createDefaultMaterial } from './MaterialUtils.js';
 
 //================================//
-export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
+export async function fastBVHExampleScene(meshMaterials, seed, numSpheres, withPlane = true)
 {
     // seed
     let s = seed | 0;
@@ -28,38 +28,40 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
     function currentByteOffset() { return globalVertexOffset * 3 * 4; }
 
     // ============== GROUND PLANE ============== //
-    /*
     const planeMin = -100;
     const planeMax = 100;
-    const pY = 0;
-    const planeMat = meshMaterials.find(m => m.name === 'ground') ||
-        createDefaultMaterial({ albedo: [0.9, 0.9, 0.9], name: 'ground', roughness: 1.0, metalness: 0.0 });
-    materials.push(planeMat);
-    perMeshWorldPositionOffsets.push(currentByteOffset());
+    if (withPlane)
+    {
+        const pY = 0;
+        const planeMat = meshMaterials.find(m => m.name === 'ground') ||
+            createDefaultMaterial({ albedo: [0.9, 0.9, 0.9], name: 'ground', roughness: 1.0, metalness: 0.0 });
+        materials.push(planeMat);
+        perMeshWorldPositionOffsets.push(currentByteOffset());
 
-    const planePositions = new Float32Array([
-        planeMin, pY, planeMin,
-        planeMax, pY, planeMin,
-        planeMax, pY, planeMax,
-        planeMin, pY, planeMax,
-    ]);
-    const planeNormals = new Float32Array([
-        0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,
-    ]);
-    const planeUVs = new Float32Array([
-        0, 0,  1, 0,  1, 1,  0, 1,
-    ]);
-    const planeIndices = new Uint16Array([0, 2, 1, 0, 3, 2]);
-    perMeshData.push({ positions: planePositions, normals: planeNormals, uvs: planeUVs, indices: planeIndices });
-    */
-   
-    const g = globalVertexOffset;
-    allPositions.push(...planePositions);
-    allNormals.push(...planeNormals);
-    allUVs.push(...planeUVs);
-    allIndices.push(g+0, g+2, g+1);   perTriangleMaterialIndices.push(0);
-    allIndices.push(g+0, g+3, g+2);   perTriangleMaterialIndices.push(0);
-    globalVertexOffset += 4;
+        const planePositions = new Float32Array([
+            planeMin, pY, planeMin,
+            planeMax, pY, planeMin,
+            planeMax, pY, planeMax,
+            planeMin, pY, planeMax,
+        ]);
+        const planeNormals = new Float32Array([
+            0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,
+        ]);
+        const planeUVs = new Float32Array([
+            0, 0,  1, 0,  1, 1,  0, 1,
+        ]);
+        const planeIndices = new Uint16Array([0, 2, 1, 0, 3, 2]);
+        perMeshData.push({ positions: planePositions, normals: planeNormals, uvs: planeUVs, indices: planeIndices });
+
+        allPositions.push(...planePositions);
+        allNormals.push(...planeNormals);
+        allUVs.push(...planeUVs);
+        allIndices.push(globalVertexOffset+0, globalVertexOffset+2, globalVertexOffset+1);
+        perTriangleMaterialIndices.push(0);
+        allIndices.push(globalVertexOffset+0, globalVertexOffset+3, globalVertexOffset+2);
+        perTriangleMaterialIndices.push(0);
+        globalVertexOffset += 4;
+    }
 
     //================================//
     const latBands = 16;

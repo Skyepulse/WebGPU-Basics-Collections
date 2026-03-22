@@ -125,6 +125,11 @@ fn cs(@builtin(global_invocation_id) gid: vec3u)
     const LEAF_BIT: u32 = 0x80000000u;
     let lo = min(i, j);
     let hi = max(i, j);
+    let triangleCount = u32(hi - lo + 1);
+
+    internalNodes[u32(i)].triangleCount = triangleCount;
+    internalNodes[u32(i)].subTreeNodeCount = 2u * triangleCount - 1u;
+    internalNodes[u32(i)].sahCost = 0.0;
 
     if (lo == gamma)
     {

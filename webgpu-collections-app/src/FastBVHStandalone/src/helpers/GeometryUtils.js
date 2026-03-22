@@ -1,21 +1,9 @@
 import { createDefaultMaterial } from './MaterialUtils.js';
 
 //================================//
-// Builds the example scene (ground plane + N spheres) as flat GPU-ready arrays.
-// Returns:
-//   worldPositionData           : Float32Array  - flat [x,y,z, ...]   (all vertex positions, world space)
-//   worldNormalData             : Float32Array  - flat [nx,ny,nz, ...] (all vertex normals)
-//   worldUVData                 : Float32Array  - flat [u,v, ...]      (all vertex UVs)
-//   worldIndexData              : Uint32Array   - flat [i0,i1,i2, ...] (triangle indices into vertex arrays)
-//   perTriangleMaterialIndices  : Uint32Array   - one material index per triangle
-//   perMeshWorldPositionOffsets : number[]      - byte offset of each mesh's vertex start in worldPositionData
-//   materials                   : Material[]    - one per mesh (ground first, then spheres)
-//   totalTriangleCount          : number
-//   perMeshData                 : Array<{positions, normals, uvs, indices(Uint16Array)}>
-//                                 - per-mesh local (=world since identity transform) data for rasterizer
 export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
 {
-    // Mulberry32 seeded PRNG
+    // seed
     let s = seed | 0;
     const random = () => {
         s = (s + 0x6D2B79F5) | 0;
@@ -25,7 +13,6 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
     };
     const randomRange = (min, max) => random() * (max - min) + min;
 
-    // Global flat accumulators
     const allPositions = [];
     const allNormals   = [];
     const allUVs       = [];
@@ -34,13 +21,14 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
     const perMeshWorldPositionOffsets = [];
     const materials = [];
     const perMeshData = [];
+    const sphereCenters = [];
 
     let globalVertexOffset = 0;
 
     function currentByteOffset() { return globalVertexOffset * 3 * 4; }
 
-    //================================//
     // ============== GROUND PLANE ============== //
+    /*
     const planeMin = -100;
     const planeMax = 100;
     const pY = 0;
@@ -63,7 +51,8 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
     ]);
     const planeIndices = new Uint16Array([0, 2, 1, 0, 3, 2]);
     perMeshData.push({ positions: planePositions, normals: planeNormals, uvs: planeUVs, indices: planeIndices });
-
+    */
+   
     const g = globalVertexOffset;
     allPositions.push(...planePositions);
     allNormals.push(...planeNormals);
@@ -73,9 +62,8 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
     globalVertexOffset += 4;
 
     //================================//
-    // ============== SPHERES ============== //
-    const latBands = 32;
-    const lonBands = 32;
+    const latBands = 16;
+    const lonBands = 16;
     const vertsPerSphere = (latBands + 1) * (lonBands + 1);
 
     for (let i = 0; i < numSpheres; i++)
@@ -96,6 +84,7 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
         const cx = randomRange(planeMin + radius, planeMax - radius);
         const cy = radius;
         const cz = randomRange(planeMin + radius, planeMax - radius);
+        sphereCenters.push({ cx, cy, cz, radius });
 
         const meshPositions = new Float32Array(vertsPerSphere * 3);
         const meshNormals   = new Float32Array(vertsPerSphere * 3);
@@ -179,5 +168,6 @@ export async function fastBVHExampleScene(meshMaterials, seed, numSpheres)
         materials,
         totalTriangleCount,
         perMeshData,
+        sphereCenters,
     };
 }

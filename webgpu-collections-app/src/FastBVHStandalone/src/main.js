@@ -72,9 +72,10 @@ class RayTracer
         this.useRaytracing = false;
         this.rayTracerMode = RayTracerMode.raytrace;
         this.numBounces = 3;
-        this.numSpheres = 1;
+        this.numSpheres = 5;
         this.materials = [];
         this.perMeshData = [];
+        this.sphereCenters = [];
         this.activeContextMenu = null;
         this.seed = 0;
 
@@ -85,14 +86,12 @@ class RayTracer
         this.fastBVH = null;
         this._shaders = null;
 
-        //--- Camera setup ---
         setCameraPosition(this.camera, 0, 100, -200);
         rotateCameraBy(this.camera, 0, -0.5);
         setCameraNearFar(this.camera, 0.1, 2000);
         this.camera.moveSpeed = 5.0;
         this.camera.rotateSpeed = 0.02;
 
-        //--- Lights (plain Float32Array instead of glm.vec3) ---
         this.lights.push({
             position:  new Float32Array([0, 100, 0]),
             intensity: 200.0,
@@ -167,7 +166,6 @@ class RayTracer
     {
         if (!this.device || !this.presentationFormat) return;
 
-        // ---- RAY TRACE PIPELINE ----
         this.RO.bindGroupLayout = this.device.createBindGroupLayout({
             label: 'Ray Trace Bind Group Layout',
             entries: [
@@ -211,7 +209,6 @@ class RayTracer
             });
         }
 
-        // ---- RASTER PIPELINE ----
         this.NO.bindGroupLayout = this.device.createBindGroupLayout({
             label: 'Normal Bind Group Layout',
             entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }]
@@ -309,7 +306,6 @@ class RayTracer
 
         const placeholderTexture = createPlaceholderTexture(this.device, 1024, 32);
 
-        // Re-use any materials that were previously set (e.g. user changed material)
         const meshMaterials = this.materials.length > 0 ? this.materials : [];
 
         const sceneData = await fastBVHExampleScene(meshMaterials, this.seed, this.numSpheres);
@@ -326,6 +322,7 @@ class RayTracer
 
         this.materials = materials;
         this.perMeshData = perMeshData;
+        this.sphereCenters = sceneData.sphereCenters;
         this.RO.perMeshWorldPositionOffsets = perMeshWorldPositionOffsets;
 
         const numMeshes = perMeshData.length;
@@ -427,7 +424,6 @@ class RayTracer
             this.NO.indexBuffers.push(idxBuf);
         }
 
-        // Rasterizer uniform + bind group
         this.NO.uniformBuffer = this.device.createBuffer({
             label: 'Normal Uniform Buffer',
             size: normalUniformDataSize,
@@ -439,7 +435,6 @@ class RayTracer
             entries: [{ binding: 0, resource: { buffer: this.NO.uniformBuffer } }],
         });
 
-        // BVH debug geometry placeholder
         this.NO.bvhDebugMaterialBuffer = this.device.createBuffer({
             label: 'BVH Debug Material Buffer',
             size: MATERIAL_SIZE * 4,
@@ -483,7 +478,6 @@ class RayTracer
         })];
         this.NO.bvhLineCounts = [0];
 
-        // ---- RAY TRACER GPU BUFFERS ----
         this.RO.uniformBuffer = this.device.createBuffer({
             label: 'Ray Tracer Uniform Buffer',
             size: rayTracerUniformDataSize,
@@ -525,7 +519,6 @@ class RayTracer
         });
         this.device.queue.writeBuffer(this.RO.perTriangleMaterialIndicesStorageBuffer, 0, perTriangleMaterialIndices);
 
-        // ---- FAST BVH PIPELINE INITIALIZATION ----
         const numVertices = worldPositionData.length / 3;
         const numTriangles = worldIndexData.length / 3;
 
@@ -537,7 +530,6 @@ class RayTracer
         this.fastBVH.initializeAABBFinalizePipeline(this.device);
         this.fastBVH.initializeDFSFlatteningPipeline(this.device);
 
-        // RO main bind group
         this.RO.bindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Bind Group',
             layout: this.RO.bindGroupLayout,
@@ -552,7 +544,6 @@ class RayTracer
             ],
         });
 
-        // Material buffer + texture array (placeholder only — no external textures in standalone)
         const materialData = flattenMaterialArray(materials);
         this.RO.materialBuffer = this.device.createBuffer({
             label: 'Ray Tracer Material Storage Buffer',
@@ -723,7 +714,8 @@ class RayTracer
     {
         if (!this.device) return;
 
-        if (this.useRaytracing) {
+        if (this.useRaytracing) 
+        {
             const data = new ArrayBuffer(rayTracerUniformDataSize);
             const floatView = new Float32Array(data);
             const uintView = new Uint32Array(data);
@@ -741,7 +733,8 @@ class RayTracer
             uintView[26] = 0;
             uintView[27] = 0;
 
-            for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < 3; i++) 
+            {
                 if (i >= this.lights.length) break;
                 const light = this.lights[i];
                 const baseIndex = 28 + i * 12;
@@ -753,7 +746,9 @@ class RayTracer
                 floatView[baseIndex + 11] = light.enabled ? 1.0 : 0.0;
             }
             this.device.queue.writeBuffer(this.RO.uniformBuffer, 0, data);
-        } else {
+        } 
+        else 
+        {
             const data = new ArrayBuffer(normalUniformDataSize);
             const floatView = new Float32Array(data);
             floatView.set(this.camera.viewMatrix, 0);
@@ -780,18 +775,72 @@ class RayTracer
     }
 
     //================================//
-    changeMeshMaterial(meshIndex, newMaterial)
+    animate()
     {
-        if (meshIndex < 0 || meshIndex >= this.materials.length) return;
-        this.materials[meshIndex] = newMaterial;
+        if (!this.device || !this.sphereCenters || !this.perMeshData) return;
 
-        const matData = flattenMaterial(newMaterial);
-        if (this.NO.materialUniforms[meshIndex])
-            this.device.queue.writeBuffer(this.NO.materialUniforms[meshIndex], 0, matData);
+        const time = performance.now() * 0.001;
+        const maxAnimated = Math.min(10, this.sphereCenters.length);
 
-        const offset = meshIndex * MATERIAL_SIZE * 4;
-        if (this.RO.materialBuffer)
-            this.device.queue.writeBuffer(this.RO.materialBuffer, offset, matData);
+        let s = (this.seed + 777) | 0;
+        const random = () => {
+            s = (s + 0x6D2B79F5) | 0;
+            let t = Math.imul(s ^ (s >>> 15), 1 | s);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+        const randomRange = (min, max) => random() * (max - min) + min;
+
+        for (let i = 0; i < maxAnimated; i++)
+        {
+            const { cx: baseCX, cy: baseCY, cz: baseCZ } = this.sphereCenters[i];
+            const orbitRadius = randomRange(20, 80);
+            const speed       = randomRange(0.3, 1.5);
+            const phaseOffset = randomRange(0, Math.PI * 2);
+            const pattern     = random();
+
+            const t = time * speed + phaseOffset;
+            let nx, ny, nz;
+
+            if (pattern < 0.25) {
+                nx = baseCX + orbitRadius * Math.sin(t);
+                nz = baseCZ + orbitRadius * Math.sin(t) * Math.cos(t);
+                ny = baseCY;
+            } else if (pattern < 0.5) {
+                const ecc = randomRange(0.3, 0.8);
+                nx = baseCX + orbitRadius * Math.cos(t);
+                nz = baseCZ + orbitRadius * ecc * Math.sin(t);
+                ny = baseCY + Math.abs(Math.sin(t * 2.0)) * 15.0;
+            } else if (pattern < 0.75) {
+                const axis = randomRange(0, Math.PI * 2);
+                const dist = Math.sin(t) * orbitRadius;
+                nx = baseCX + Math.cos(axis) * dist;
+                nz = baseCZ + Math.sin(axis) * dist;
+                ny = baseCY + Math.abs(Math.sin(t * 1.5)) * 8.0;
+            } else {
+                const spiralR = orbitRadius * (0.5 + 0.5 * Math.sin(t * 0.3));
+                nx = baseCX + spiralR * Math.cos(t);
+                nz = baseCZ + spiralR * Math.sin(t);
+                ny = baseCY;
+            }
+
+            const dx = nx - baseCX;
+            const dy = ny - baseCY;
+            const dz = nz - baseCZ;
+
+            const meshIndex = i + 1;
+            const basePositions = this.perMeshData[meshIndex].positions;
+            const numVerts = basePositions.length / 3;
+            const translated = new Float32Array(basePositions.length);
+            for (let v = 0; v < numVerts; v++) {
+                translated[v * 3 + 0] = basePositions[v * 3 + 0] + dx;
+                translated[v * 3 + 1] = basePositions[v * 3 + 1] + dy;
+                translated[v * 3 + 2] = basePositions[v * 3 + 2] + dz;
+            }
+
+            const byteOffset = this.RO.perMeshWorldPositionOffsets[meshIndex];
+            this.device.queue.writeBuffer(this.RO.worldPositionStorageBuffer, byteOffset, translated);
+        }
     }
 
     //================================//
@@ -811,6 +860,7 @@ class RayTracer
             const startTime = performance.now();
 
             this.handleInput();
+            this.animate();
             this.updateUniforms();
 
             const textureView = this.context.getCurrentTexture().createView();

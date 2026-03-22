@@ -38,6 +38,7 @@ export class FastParallelBVH
         this.ITEMS_PER_WORKGROUP = 2 * this.THREADS_PER_WORKGROUP;
         this.BIT_COUNT = 30;
         this.NUM_PASSES = this.BIT_COUNT / 2;
+        this.MAX_AABB_REDUCTION_PASSES = 64;
 
         this.minMaxLevels = [];
         this.minMaxReadbackBuffer = null;
@@ -441,10 +442,14 @@ export class FastParallelBVH
         this.aabbBindGroupLayout = device.createBindGroupLayout({
             label: 'AABB Bind Group Layout',
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // vertex buffer
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // index buffer
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // sorted index buffer
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // internal nodes buffer
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // leaf AABBs buffer
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // pending child counts
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // initial frontier buffer
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // initial frontier count
             ]
         });
         this.aabbPipelineLayout = device.createPipelineLayout({ label: 'AABB Pipeline Layout', bindGroupLayouts: [this.aabbBindGroupLayout] });
@@ -464,9 +469,24 @@ export class FastParallelBVH
         this.aabbIndexBuffer         = indexBuffer;
         this.aabbSortedIndexBuffer   = this.valuesBufferB; // sorted values also in B after 15 passes
 
-        this.leafAABBsBuffer   = device.createBuffer({ label: 'Leaf AABBs Buffer',   size: this.numTriangles * LeafAABBSize,          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-        this.aabbReadyBufferA  = device.createBuffer({ label: 'AABB Ready Buffer A', size: Math.max(this.numTriangles - 1, 1) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-        this.aabbReadyBufferB  = device.createBuffer({ label: 'AABB Ready Buffer B', size: Math.max(this.numTriangles - 1, 1) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        this.leafAABBsBuffer = device.createBuffer({
+            label: 'Leaf AABBs Buffer',
+            size: this.numTriangles * LeafAABBSize,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+        });
+        this.aabbPendingChildCountBuffer = device.createBuffer({
+            label: 'AABB Pending Child Count Buffer',
+            size: Math.max(this.numTriangles - 1, 1) * 4,
+            usage: GPUBufferUsage.STORAGE
+        });
+        this.aabbFrontierBuffers = [
+            device.createBuffer({ label: 'AABB Frontier Buffer A', size: Math.max(this.numTriangles - 1, 1) * 4, usage: GPUBufferUsage.STORAGE }),
+            device.createBuffer({ label: 'AABB Frontier Buffer B', size: Math.max(this.numTriangles - 1, 1) * 4, usage: GPUBufferUsage.STORAGE }),
+        ];
+        this.aabbFrontierCountBuffers = [
+            device.createBuffer({ label: 'AABB Frontier Count Buffer A', size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }),
+            device.createBuffer({ label: 'AABB Frontier Count Buffer B', size: 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }),
+        ];
 
         this.aabbBindGroup = device.createBindGroup({
             label: 'AABB Bind Group',
@@ -475,7 +495,11 @@ export class FastParallelBVH
                 { binding: 0, resource: { buffer: this.aabbVertexBuffer } },
                 { binding: 1, resource: { buffer: this.aabbIndexBuffer } },
                 { binding: 2, resource: { buffer: this.aabbSortedIndexBuffer } },
-                { binding: 3, resource: { buffer: this.leafAABBsBuffer } },
+                { binding: 3, resource: { buffer: this.aabbInternalNodesBuffer } },
+                { binding: 4, resource: { buffer: this.leafAABBsBuffer } },
+                { binding: 5, resource: { buffer: this.aabbPendingChildCountBuffer } },
+                { binding: 6, resource: { buffer: this.aabbFrontierBuffers[0] } },
+                { binding: 7, resource: { buffer: this.aabbFrontierCountBuffers[0] } },
             ]
         });
     }
@@ -487,34 +511,73 @@ export class FastParallelBVH
         this.aabbFinalizeBindGroupLayout = device.createBindGroupLayout({
             label: 'AABB Finalize Bind Group Layout',
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // internal nodes
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // leaf AABBs
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // pending child counts
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // frontier in
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // frontier in count
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // frontier out
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // frontier out count
             ]
         });
         this.aabbFinalizePipelineLayout = device.createPipelineLayout({ label: 'AABB Finalize Pipeline Layout', bindGroupLayouts: [this.aabbFinalizeBindGroupLayout] });
-        this.aabbFinalizePipeline = device.createComputePipeline({
-            label: 'AABB Finalize Pipeline',
+        this.aabbFinalizeReducePipeline = device.createComputePipeline({
+            label: 'AABB Finalize Reduce Pipeline',
             layout: this.aabbFinalizePipelineLayout,
             compute: {
                 module: this.aabbFinalizeShaderModule,
-                entryPoint: 'cs',
-                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP, INTERNAL_NODE_COUNT: this.numTriangles - 1 }
+                entryPoint: 'cs_reduce',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP }
             }
         });
+        this.aabbFinalizePreparePipeline = device.createComputePipeline({
+            label: 'AABB Finalize Prepare Pipeline',
+            layout: this.aabbFinalizePipelineLayout,
+            compute: {
+                module: this.aabbFinalizeShaderModule,
+                entryPoint: 'cs_prepare',
+                constants: { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP }
+            }
+        });
+
+        // Again a ping-pong setup for the frontier buffers
+        // like the radix sort pipeline
         this.aabbFinalizeBindGroups = [
-            device.createBindGroup({ label: 'AABB Finalize Bind Group 0', layout: this.aabbFinalizeBindGroupLayout, entries: [{ binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } }, { binding: 1, resource: { buffer: this.leafAABBsBuffer } }, { binding: 2, resource: { buffer: this.aabbReadyBufferA } }, { binding: 3, resource: { buffer: this.aabbReadyBufferB } }] }),
-            device.createBindGroup({ label: 'AABB Finalize Bind Group 1', layout: this.aabbFinalizeBindGroupLayout, entries: [{ binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } }, { binding: 1, resource: { buffer: this.leafAABBsBuffer } }, { binding: 2, resource: { buffer: this.aabbReadyBufferB } }, { binding: 3, resource: { buffer: this.aabbReadyBufferA } }] }),
+            device.createBindGroup({
+                label: 'AABB Finalize Bind Group 0',
+                layout: this.aabbFinalizeBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                    { binding: 1, resource: { buffer: this.leafAABBsBuffer } },
+                    { binding: 2, resource: { buffer: this.aabbPendingChildCountBuffer } },
+                    { binding: 3, resource: { buffer: this.aabbFrontierBuffers[0] } },
+                    { binding: 4, resource: { buffer: this.aabbFrontierCountBuffers[0] } },
+                    { binding: 5, resource: { buffer: this.aabbFrontierBuffers[1] } },
+                    { binding: 6, resource: { buffer: this.aabbFrontierCountBuffers[1] } },
+                ]
+            }),
+            device.createBindGroup({
+                label: 'AABB Finalize Bind Group 1',
+                layout: this.aabbFinalizeBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.aabbInternalNodesBuffer } },
+                    { binding: 1, resource: { buffer: this.leafAABBsBuffer } },
+                    { binding: 2, resource: { buffer: this.aabbPendingChildCountBuffer } },
+                    { binding: 3, resource: { buffer: this.aabbFrontierBuffers[1] } },
+                    { binding: 4, resource: { buffer: this.aabbFrontierCountBuffers[1] } },
+                    { binding: 5, resource: { buffer: this.aabbFrontierBuffers[0] } },
+                    { binding: 6, resource: { buffer: this.aabbFrontierCountBuffers[0] } },
+                ]
+            }),
         ];
     }
 
     //================================//
     clearAtomicCounters(encoder)
     {
-        if (!this.aabbReadyBufferA || !this.aabbReadyBufferB) return;
-        encoder.clearBuffer(this.aabbReadyBufferA);
-        encoder.clearBuffer(this.aabbReadyBufferB);
+        if (!this.aabbFrontierCountBuffers) return;
+        encoder.clearBuffer(this.aabbFrontierCountBuffers[0]);
+        encoder.clearBuffer(this.aabbFrontierCountBuffers[1]);
     }
 
     //================================//
@@ -528,17 +591,31 @@ export class FastParallelBVH
     }
 
     //================================//
-    // BIT_COUNT=30 iterations is the proven upper bound for 30-bit Morton codes.
     dispatchAABBFinalizePass(commandEncoder)
     {
-        if (!this.aabbFinalizePipeline || !this.aabbFinalizeBindGroups) return;
+        if (!this.aabbFinalizeReducePipeline || !this.aabbFinalizePreparePipeline || !this.aabbFinalizeBindGroups) return;
+        if (this.numTriangles <= 1) return;
         const dispatchX = Math.ceil((this.numTriangles - 1) / this.THREADS_PER_WORKGROUP);
         if (dispatchX <= 0) return;
-        commandEncoder.setPipeline(this.aabbFinalizePipeline);
-        for (let i = 0; i < this.BIT_COUNT; i++)
+
+        // First prepare: reset frontierOutCount[0] before the loop starts
+        commandEncoder.setPipeline(this.aabbFinalizePreparePipeline);
+        commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[0]);
+        commandEncoder.dispatchWorkgroups(1, 1, 1);
+
+        for (let i = 0; i < this.MAX_AABB_REDUCTION_PASSES; i++)
         {
-            commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[i % 2]);
+            const bindGroupIndex = i % 2;
+
+            // Process the current frontier → write results + add parents to out-frontier
+            commandEncoder.setPipeline(this.aabbFinalizeReducePipeline);
+            commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[bindGroupIndex]);
             commandEncoder.dispatchWorkgroups(dispatchX, 1, 1);
+
+            // Reset the next out-frontier count before swapping
+            commandEncoder.setPipeline(this.aabbFinalizePreparePipeline);
+            commandEncoder.setBindGroup(0, this.aabbFinalizeBindGroups[1 - bindGroupIndex]);
+            commandEncoder.dispatchWorkgroups(1, 1, 1);
         }
     }
 

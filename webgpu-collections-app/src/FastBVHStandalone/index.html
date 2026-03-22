@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FastBVH Standalone</title>
+    <title>Fast Parallel Construction of BVH Image Synthesis Project (Rios Maël)</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -43,9 +43,10 @@
             white-space: pre;
             pointer-events: none;
             line-height: 1.5;
+            z-index: 10;
         }
 
-        #util {
+        #utils {
             position: absolute;
             top: 8px;
             right: 8px;
@@ -61,21 +62,22 @@
             max-height: calc(100vh - 16px);
             overflow-y: auto;
             min-width: 200px;
+            z-index: 10;
         }
 
-        #util label {
+        #utils label {
             display: flex;
             align-items: center;
             gap: 6px;
             cursor: pointer;
         }
 
-        #util input[type="range"] {
+        #utils input[type="range"] {
             width: 120px;
             accent-color: #00ff88;
         }
 
-        #util input[type="number"] {
+        #utils input[type="number"] {
             width: 80px;
             background: #2a2a3a;
             color: #e0e0e0;
@@ -84,7 +86,7 @@
             padding: 2px 4px;
         }
 
-        #util button {
+        #utils button {
             background: #2a2a3a;
             color: #e0e0e0;
             border: 1px solid #555;
@@ -95,7 +97,7 @@
             font-size: 12px;
         }
 
-        #util button:hover {
+        #utils button:hover {
             background: #3a3a4a;
         }
 
@@ -113,7 +115,7 @@
     <div id="canvas-container">
         <canvas id="gpuCanvas"></canvas>
         <div id="info"></div>
-        <div id="util"></div>
+        <div id="utils"></div>
         <canvas id="profiler"></canvas>
     </div>
 
@@ -121,8 +123,6 @@
         import { startup } from './src/main.js';
 
         const canvas = document.getElementById('gpuCanvas');
-
-        // Match canvas resolution to display size
         const ro = new ResizeObserver(() => {
             canvas.width  = canvas.clientWidth;
             canvas.height = canvas.clientHeight;

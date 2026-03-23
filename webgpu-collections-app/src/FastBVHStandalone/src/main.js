@@ -20,6 +20,47 @@ const RayTracerMode = {
 };
 
 //================================//
+// So I can also see the BVH in wireframe without raytracing
+function buildBVHLineVertices(buffer, totalNodes, targetDepth)
+{
+    const f32 = new Float32Array(buffer);
+    const u32 = new Uint32Array(buffer);
+    const STRIDE = 8;
+
+    const verts = [];
+    const addBox = (x0, y0, z0, x1, y1, z1) => {
+        const c = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],
+                   [x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+        for (const [a, b] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]])
+            verts.push(...c[a], ...c[b]);
+    };
+
+    // In order to wshoe ONLY the nodes at exactly depth N
+    // keep track of miss and leaves that should always tender.
+    const stack = [{ idx: 0, depth: 0, miss: totalNodes }];
+    while (stack.length > 0) {
+        const { idx, depth, miss } = stack.pop();
+        if (idx >= totalNodes) continue;
+
+        const base = idx * STRIDE;
+        const isLeaf = u32[base + 7] > 0;
+
+        if (isLeaf || depth === targetDepth) {
+            addBox(f32[base], f32[base+1], f32[base+2], f32[base+4], f32[base+5], f32[base+6]);
+        } else {
+            const leftChild = idx + 1;
+            if (leftChild >= totalNodes) continue;
+            const leftBase = leftChild * STRIDE;
+            const leftIsLeaf = u32[leftBase + 7] > 0;
+            const leftMiss = leftIsLeaf ? leftChild + 1 : u32[leftBase + 3];
+            if (leftMiss < miss) stack.push({ idx: leftMiss, depth: depth + 1, miss });
+            stack.push({ idx: leftChild, depth: depth + 1, miss: leftMiss });
+        }
+    }
+    return new Float32Array(verts);
+}
+
+//================================//
 async function loadShaders()
 {
     const load = (path) => fetch(path).then(r => { if (!r.ok) throw new Error(`Failed to load shader: ${path}`); return r.text(); });
@@ -281,7 +322,7 @@ class RayTracer
                     targets: [{ format: this.presentationFormat }],
                 },
                 primitive: { topology: 'line-list' },
-                depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+                depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
             });
         }
 
@@ -531,6 +572,13 @@ class RayTracer
         this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
         this.fastBVH.initializeAABBFinalizePipeline(this.device);
         this.fastBVH.initializeDFSFlatteningPipeline(this.device);
+
+        if (this.bvhReadbackBuffer) this.bvhReadbackBuffer.destroy();
+        this.bvhReadbackBuffer = this.device.createBuffer({
+            label: 'BVH Readback Buffer',
+            size: this.fastBVH.getFinalFlattenedBVHNodeCount() * 32,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+        });
 
         this.RO.bindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Bind Group',
@@ -917,6 +965,9 @@ class RayTracer
             if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
                 this.fastBVH.copyResultForReadback(encoder);
 
+            if (this.showBVH && !this.useRaytracing && this.bvhReadbackBuffer?.mapState === 'unmapped')
+                encoder.copyBufferToBuffer(this.fastBVH.getFinalFlattenedBVHBuffer(), 0, this.bvhReadbackBuffer, 0, this.bvhReadbackBuffer.size);
+
             const pass = encoder.beginRenderPass(renderPassDescriptor);
 
             if (this.useRaytracing) {
@@ -961,6 +1012,28 @@ class RayTracer
             }
 
             this.device.queue.submit([encoder.finish()]);
+
+            if (this.showBVH && !this.useRaytracing && this.bvhReadbackBuffer?.mapState === 'unmapped') {
+                this.bvhReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+                    const dataCopy = this.bvhReadbackBuffer.getMappedRange().slice(0);
+                    this.bvhReadbackBuffer.unmap();
+                    const verts = buildBVHLineVertices(dataCopy, this.fastBVH.getFinalFlattenedBVHNodeCount(), this.bvhDepth === Infinity ? Infinity : this.bvhDepth);
+                    if (verts.length > 0) {
+                        if (this.NO.bvhLineGeometryBuffers[0].size < verts.byteLength) {
+                            this.NO.bvhLineGeometryBuffers[0].destroy();
+                            this.NO.bvhLineGeometryBuffers[0] = this.device.createBuffer({
+                                label: 'BVH Debug Line Geometry Buffer',
+                                size: verts.byteLength,
+                                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+                            });
+                        }
+                        this.device.queue.writeBuffer(this.NO.bvhLineGeometryBuffers[0], 0, verts);
+                        this.NO.bvhLineCounts[0] = verts.length / 3;
+                    } else {
+                        this.NO.bvhLineCounts[0] = 0;
+                    }
+                });
+            }
 
             if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug) {
                 this.fastBVH.minMaxReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {

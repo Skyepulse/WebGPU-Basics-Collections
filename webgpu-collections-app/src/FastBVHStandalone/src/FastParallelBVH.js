@@ -19,6 +19,7 @@ export class FastParallelBVH
             patriciaTree:   await load('./Shaders/FastBVHShaders/patriciaTree.wgsl'),
             AABBUpPass:     await load('./Shaders/FastBVHShaders/AABBUpPass.wgsl'),
             DFSFlattening:  await load('./Shaders/FastBVHShaders/DFSFlattening.wgsl'),
+            BVHWireframe:   await load('./Shaders/FastBVHShaders/BVHWireframe.wgsl'),
         };
         return new FastParallelBVH(shaders);
     }
@@ -443,7 +444,6 @@ export class FastParallelBVH
             size: this.numTriangles * LeafAABBSize,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
         });
-        // 32 bytes per internal node: 6 atomic floats + counter + pad
         this.aabbAccumBuffer = device.createBuffer({
             label: 'AABB Accum Buffer',
             size: Math.max(this.numTriangles - 1, 1) * 32,
@@ -563,4 +563,121 @@ export class FastParallelBVH
     //================================//
     getFinalFlattenedBVHBuffer()    { return this.dfsFlattenedNodesBuffer; }
     getFinalFlattenedBVHNodeCount() { return this.numTriangles * 2 - 1; }
+
+    //================================//
+    initializeBVHWireframePipeline(device)
+    {
+        this._device = device;
+        const totalNodes = this.numTriangles * 2 - 1;
+
+        this.bvhWireframeDiffBuffer = device.createBuffer({
+            label: 'BVH Wireframe Diff Buffer',
+            size: Math.max(totalNodes, 1) * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.bvhWireframeDepthBuffer = device.createBuffer({
+            label: 'BVH Wireframe Depth Buffer',
+            size: Math.max(totalNodes, 1) * 4,
+            usage: GPUBufferUsage.STORAGE
+        });
+        this.bvhWireframeVertexBuffer = device.createBuffer({
+            label: 'BVH Wireframe Vertex Buffer',
+            size: Math.max(totalNodes, 1) * 24 * 12,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
+        });
+        this.bvhWireframeArgsBuffer = device.createBuffer({
+            label: 'BVH Wireframe Args Buffer',
+            size: 16,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST
+        });
+        device.queue.writeBuffer(this.bvhWireframeArgsBuffer, 0, new Uint32Array([0, 1, 0, 0]));
+
+        this.bvhWireframeUniformBuffer = device.createBuffer({
+            label: 'BVH Wireframe Uniform Buffer',
+            size: 16,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+
+        const bindGroupLayout = device.createBindGroupLayout({
+            label: 'BVH Wireframe Bind Group Layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } }, // flatBVH
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // diffBuf (atomic)
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // depthBuf
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // vertices
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },           // drawArgs (atomic)
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },           // uniforms
+            ]
+        });
+
+        const sm = device.createShaderModule({ label: 'BVH Wireframe Shader', code: this._shaders.BVHWireframe });
+        const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+        const constants = { THREADS_PER_WORKGROUP: this.THREADS_PER_WORKGROUP };
+
+        this.bvhWireframeMarkPipeline = device.createComputePipeline({
+            label: 'BVH Wireframe Mark Pipeline',
+            layout: pipelineLayout,
+            compute: { module: sm, entryPoint: 'cs_mark', constants }
+        });
+        this.bvhWireframeScanPipeline = device.createComputePipeline({
+            label: 'BVH Wireframe Scan Pipeline',
+            layout: pipelineLayout,
+            compute: { module: sm, entryPoint: 'cs_scan', constants }
+        });
+        this.bvhWireframeEmitPipeline = device.createComputePipeline({
+            label: 'BVH Wireframe Emit Pipeline',
+            layout: pipelineLayout,
+            compute: { module: sm, entryPoint: 'cs_emit', constants }
+        });
+
+        this.bvhWireframeBindGroup = device.createBindGroup({
+            label: 'BVH Wireframe Bind Group',
+            layout: bindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.dfsFlattenedNodesBuffer } },
+                { binding: 1, resource: { buffer: this.bvhWireframeDiffBuffer } },
+                { binding: 2, resource: { buffer: this.bvhWireframeDepthBuffer } },
+                { binding: 3, resource: { buffer: this.bvhWireframeVertexBuffer } },
+                { binding: 4, resource: { buffer: this.bvhWireframeArgsBuffer } },
+                { binding: 5, resource: { buffer: this.bvhWireframeUniformBuffer } },
+            ]
+        });
+    }
+
+    //================================//
+    clearBVHWireframe(encoder)
+    {
+        if (!this.bvhWireframeDiffBuffer) return;
+        encoder.clearBuffer(this.bvhWireframeDiffBuffer);
+        encoder.clearBuffer(this.bvhWireframeArgsBuffer, 0, 4);
+    }
+
+    //================================//
+    dispatchBVHWireframePass(computePass, targetDepth)
+    {
+        if (!this.bvhWireframeMarkPipeline) return;
+        const totalNodes = this.numTriangles * 2 - 1;
+        if (totalNodes <= 0) return;
+
+        const targetDepthU32 = (targetDepth === Infinity || targetDepth >= 0xFFFFFFFF || targetDepth < 0) ? 0xFFFFFFFF : targetDepth >>> 0;
+
+        this._device.queue.writeBuffer(
+            this.bvhWireframeUniformBuffer, 0,
+            new Uint32Array([totalNodes, targetDepthU32, 0, 0])
+        );
+
+        const dx = Math.ceil(totalNodes / this.THREADS_PER_WORKGROUP);
+
+        computePass.setPipeline(this.bvhWireframeMarkPipeline);
+        computePass.setBindGroup(0, this.bvhWireframeBindGroup);
+        computePass.dispatchWorkgroups(dx, 1, 1);
+
+        computePass.setPipeline(this.bvhWireframeScanPipeline);
+        computePass.setBindGroup(0, this.bvhWireframeBindGroup);
+        computePass.dispatchWorkgroups(1, 1, 1);
+
+        computePass.setPipeline(this.bvhWireframeEmitPipeline);
+        computePass.setBindGroup(0, this.bvhWireframeBindGroup);
+        computePass.dispatchWorkgroups(dx, 1, 1);
+    }
 }

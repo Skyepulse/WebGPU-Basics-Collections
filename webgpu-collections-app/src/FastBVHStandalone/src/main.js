@@ -20,47 +20,6 @@ const RayTracerMode = {
 };
 
 //================================//
-// So I can also see the BVH in wireframe without raytracing
-function buildBVHLineVertices(buffer, totalNodes, targetDepth)
-{
-    const f32 = new Float32Array(buffer);
-    const u32 = new Uint32Array(buffer);
-    const STRIDE = 8;
-
-    const verts = [];
-    const addBox = (x0, y0, z0, x1, y1, z1) => {
-        const c = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],
-                   [x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
-        for (const [a, b] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]])
-            verts.push(...c[a], ...c[b]);
-    };
-
-    // In order to wshoe ONLY the nodes at exactly depth N
-    // keep track of miss and leaves that should always tender.
-    const stack = [{ idx: 0, depth: 0, miss: totalNodes }];
-    while (stack.length > 0) {
-        const { idx, depth, miss } = stack.pop();
-        if (idx >= totalNodes) continue;
-
-        const base = idx * STRIDE;
-        const isLeaf = u32[base + 7] > 0;
-
-        if (isLeaf || depth === targetDepth) {
-            addBox(f32[base], f32[base+1], f32[base+2], f32[base+4], f32[base+5], f32[base+6]);
-        } else {
-            const leftChild = idx + 1;
-            if (leftChild >= totalNodes) continue;
-            const leftBase = leftChild * STRIDE;
-            const leftIsLeaf = u32[leftBase + 7] > 0;
-            const leftMiss = leftIsLeaf ? leftChild + 1 : u32[leftBase + 3];
-            if (leftMiss < miss) stack.push({ idx: leftMiss, depth: depth + 1, miss });
-            stack.push({ idx: leftChild, depth: depth + 1, miss: leftMiss });
-        }
-    }
-    return new Float32Array(verts);
-}
-
-//================================//
 async function loadShaders()
 {
     const load = (path) => fetch(path).then(r => { if (!r.ok) throw new Error(`Failed to load shader: ${path}`); return r.text(); });
@@ -122,6 +81,7 @@ class RayTracer
         this.withPlane = true;
 
         this.showBVH = false;
+        this.animateFlag = true;
         this.bvhDepth = Infinity;
         this.minMaxBoundsText = '';
 
@@ -571,13 +531,7 @@ class RayTracer
         this.fastBVH.initializePatriciaTreePipeline(this.device);
         this.fastBVH.initializeAABBUpPassPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
         this.fastBVH.initializeDFSFlatteningPipeline(this.device);
-
-        if (this.bvhReadbackBuffer) this.bvhReadbackBuffer.destroy();
-        this.bvhReadbackBuffer = this.device.createBuffer({
-            label: 'BVH Readback Buffer',
-            size: this.fastBVH.getFinalFlattenedBVHNodeCount() * 32,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-        });
+        this.fastBVH.initializeBVHWireframePipeline(this.device);
 
         this.RO.bindGroup = this.device.createBindGroup({
             label: 'Ray Tracer Bind Group',
@@ -651,6 +605,9 @@ class RayTracer
         utilElement.appendChild(document.createElement('br'));
 
         addSlider('Number of Bounces', this.numBounces, 0, 20, 1, utilElement, (value) => { this.numBounces = value; });
+        utilElement.appendChild(document.createElement('br'));
+
+        addCheckbox('Animate', this.animateFlag, utilElement, (value) => { this.animateFlag = value; });
         utilElement.appendChild(document.createElement('br'));
 
         this.lights.forEach((_, index) => {
@@ -916,14 +873,21 @@ class RayTracer
             const startTime = performance.now();
 
             this.handleInput();
-            this.animate();
+
+            if (this.animateFlag)
+                this.animate();
+
             this.updateUniforms();
 
             // For some reason, if we did not dispatch the BVH build in isolation,
             // it would hang the GPU and break the application.
             // This is the workaround I foung to make it work
             const bvhEncoder = this.device.createCommandEncoder({ label: 'BVH Build Encoder' });
+
             this.fastBVH.clearAtomicCounters(bvhEncoder);
+            if (this.showBVH && !this.useRaytracing)
+                this.fastBVH.clearBVHWireframe(bvhEncoder);
+
             const computePass = bvhEncoder.beginComputePass({
                 label: 'FastBVH Compute Pass',
                 ...(this.timestampQuerySet != null && {
@@ -935,17 +899,16 @@ class RayTracer
                 })
             });
             this.fastBVH.dispatch(computePass);
+
+            if (this.showBVH && !this.useRaytracing)
+                this.fastBVH.dispatchBVHWireframePass(computePass, this.bvhDepth);
             computePass.end();
 
             if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
                 this.fastBVH.copyResultForReadback(bvhEncoder);
 
-            if (this.showBVH && !this.useRaytracing && this.bvhReadbackBuffer?.mapState === 'unmapped')
-                bvhEncoder.copyBufferToBuffer(this.fastBVH.getFinalFlattenedBVHBuffer(), 0, this.bvhReadbackBuffer, 0, this.bvhReadbackBuffer.size);
-
             this.device.queue.submit([bvhEncoder.finish()]);
             await this.device.queue.onSubmittedWorkDone();
-            // --- end BVH build ---
 
             const textureView = this.context.getCurrentTexture().createView();
             const depthStencilAttachment = !this.useRaytracing ? {
@@ -998,8 +961,8 @@ class RayTracer
                     pass.setPipeline(this.NO.bvhDrawPipeline);
                     pass.setBindGroup(0, this.NO.bindGroup);
                     pass.setBindGroup(1, this.NO.bvhDebugBindGroup);
-                    pass.setVertexBuffer(0, this.NO.bvhLineGeometryBuffers[0]);
-                    pass.draw(this.NO.bvhLineCounts[0]);
+                    pass.setVertexBuffer(0, this.fastBVH.bvhWireframeVertexBuffer);
+                    pass.drawIndirect(this.fastBVH.bvhWireframeArgsBuffer, 0);
                 }
             }
             pass.end();
@@ -1019,28 +982,6 @@ class RayTracer
             }
 
             this.device.queue.submit([encoder.finish()]);
-
-            if (this.showBVH && !this.useRaytracing && this.bvhReadbackBuffer?.mapState === 'unmapped') {
-                this.bvhReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
-                    const dataCopy = this.bvhReadbackBuffer.getMappedRange().slice(0);
-                    this.bvhReadbackBuffer.unmap();
-                    const verts = buildBVHLineVertices(dataCopy, this.fastBVH.getFinalFlattenedBVHNodeCount(), this.bvhDepth === Infinity ? Infinity : this.bvhDepth);
-                    if (verts.length > 0) {
-                        if (this.NO.bvhLineGeometryBuffers[0].size < verts.byteLength) {
-                            this.NO.bvhLineGeometryBuffers[0].destroy();
-                            this.NO.bvhLineGeometryBuffers[0] = this.device.createBuffer({
-                                label: 'BVH Debug Line Geometry Buffer',
-                                size: verts.byteLength,
-                                usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-                            });
-                        }
-                        this.device.queue.writeBuffer(this.NO.bvhLineGeometryBuffers[0], 0, verts);
-                        this.NO.bvhLineCounts[0] = verts.length / 3;
-                    } else {
-                        this.NO.bvhLineCounts[0] = 0;
-                    }
-                });
-            }
 
             if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug) {
                 this.fastBVH.minMaxReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
@@ -1063,7 +1004,6 @@ class RayTracer
             if (this.infoElement && this.device) {
                 this.infoElement.textContent =
                     `FPS: ${(1000 / dt).toFixed(1)}\n` +
-                    `JS:  ${jsTime.toFixed(1)} ms\n` +
                     `RGPU: ${(gpuTime / 1e6).toFixed(2)} ms\n` +
                     `CGPU: ${(gpuComputeTime / 1e6).toFixed(2)} ms\n` +
                     `Triangles: ${this.fastBVH.numTriangles}\n` +

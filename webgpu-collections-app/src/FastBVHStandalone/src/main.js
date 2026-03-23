@@ -569,8 +569,7 @@ class RayTracer
         this.fastBVH.initializeMortonPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer, numTriangles);
         this.fastBVH.initializeRadixSortPipelines(this.device);
         this.fastBVH.initializePatriciaTreePipeline(this.device);
-        this.fastBVH.initializeAABBPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
-        this.fastBVH.initializeAABBFinalizePipeline(this.device);
+        this.fastBVH.initializeAABBUpPassPipeline(this.device, this.RO.worldPositionStorageBuffer, this.RO.indexStorageBuffer);
         this.fastBVH.initializeDFSFlatteningPipeline(this.device);
 
         if (this.bvhReadbackBuffer) this.bvhReadbackBuffer.destroy();
@@ -909,7 +908,7 @@ class RayTracer
         let gpuTime = 0;
         let gpuComputeTime = 0;
 
-        const render = (now) => {
+        const render = async (now) => {
             if (!this.canvas || !this.device || !this.context) return;
 
             const dt = now - then;
@@ -919,6 +918,34 @@ class RayTracer
             this.handleInput();
             this.animate();
             this.updateUniforms();
+
+            // For some reason, if we did not dispatch the BVH build in isolation,
+            // it would hang the GPU and break the application.
+            // This is the workaround I foung to make it work
+            const bvhEncoder = this.device.createCommandEncoder({ label: 'BVH Build Encoder' });
+            this.fastBVH.clearAtomicCounters(bvhEncoder);
+            const computePass = bvhEncoder.beginComputePass({
+                label: 'FastBVH Compute Pass',
+                ...(this.timestampQuerySet != null && {
+                    timestampWrites: {
+                        querySet: this.timestampQuerySet.querySet,
+                        beginningOfPassWriteIndex: 2,
+                        endOfPassWriteIndex: 3,
+                    }
+                })
+            });
+            this.fastBVH.dispatch(computePass);
+            computePass.end();
+
+            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
+                this.fastBVH.copyResultForReadback(bvhEncoder);
+
+            if (this.showBVH && !this.useRaytracing && this.bvhReadbackBuffer?.mapState === 'unmapped')
+                bvhEncoder.copyBufferToBuffer(this.fastBVH.getFinalFlattenedBVHBuffer(), 0, this.bvhReadbackBuffer, 0, this.bvhReadbackBuffer.size);
+
+            this.device.queue.submit([bvhEncoder.finish()]);
+            await this.device.queue.onSubmittedWorkDone();
+            // --- end BVH build ---
 
             const textureView = this.context.getCurrentTexture().createView();
             const depthStencilAttachment = !this.useRaytracing ? {
@@ -947,26 +974,6 @@ class RayTracer
             };
 
             const encoder = this.device.createCommandEncoder({ label: 'Main Encoder' });
-            this.fastBVH.clearAtomicCounters(encoder);
-
-            const computePass = encoder.beginComputePass({
-                label: 'FastBVH Compute Pass',
-                ...(this.timestampQuerySet != null && {
-                    timestampWrites: {
-                        querySet: this.timestampQuerySet.querySet,
-                        beginningOfPassWriteIndex: 2,
-                        endOfPassWriteIndex: 3,
-                    }
-                })
-            });
-            this.fastBVH.dispatch(computePass);
-            computePass.end();
-
-            if (this.fastBVH.minMaxReadbackBuffer?.mapState === 'unmapped' && this.fastBVH.debug)
-                this.fastBVH.copyResultForReadback(encoder);
-
-            if (this.showBVH && !this.useRaytracing && this.bvhReadbackBuffer?.mapState === 'unmapped')
-                encoder.copyBufferToBuffer(this.fastBVH.getFinalFlattenedBVHBuffer(), 0, this.bvhReadbackBuffer, 0, this.bvhReadbackBuffer.size);
 
             const pass = encoder.beginRenderPass(renderPassDescriptor);
 
